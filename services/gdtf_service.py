@@ -20,6 +20,7 @@ class GDTFService:
     
     def __init__(self):
         self.profiles: Dict[str, GDTFProfile] = {}
+        self.profile_sources: Dict[str, str] = {}  # Track source: 'mvr' or 'external'
         self.universe_size = 512
     
     def load_profiles_from_mvr(self, mvr_path: str) -> Dict[str, GDTFProfile]:
@@ -45,6 +46,7 @@ class GDTFService:
                         profile = self._load_gdtf_from_zip(zip_file, gdtf_filename)
                         if profile:
                             self.profiles[profile.name] = profile
+                            self.profile_sources[profile.name] = 'mvr'  # Mark as MVR source
                     except Exception as e:
                         print(f"Warning: Could not load GDTF file {gdtf_filename}: {e}")
                         
@@ -76,6 +78,7 @@ class GDTFService:
                 if profile:
                     loaded_profiles[profile.name] = profile
                     self.profiles[profile.name] = profile
+                    self.profile_sources[profile.name] = 'external'  # Mark as external source
             except Exception as e:
                 print(f"Warning: Could not load GDTF file {gdtf_file.name}: {e}")
         
@@ -366,6 +369,22 @@ class GDTFService:
         """Get all available GDTF profile names."""
         return sorted(list(self.profiles.keys()))
     
+    def get_profiles_by_source(self) -> Dict[str, List[str]]:
+        """Get GDTF profiles grouped by source (mvr or external)."""
+        mvr_profiles = []
+        external_profiles = []
+        
+        for profile_name, source in self.profile_sources.items():
+            if source == 'mvr':
+                mvr_profiles.append(profile_name)
+            elif source == 'external':
+                external_profiles.append(profile_name)
+        
+        return {
+            'mvr': sorted(mvr_profiles),
+            'external': sorted(external_profiles)
+        }
+    
     def get_profile_modes(self, profile_name: str) -> List[str]:
         """Get available modes for a specific GDTF profile."""
         profile = self.profiles.get(profile_name)
@@ -400,6 +419,7 @@ class GDTFService:
     def clear_profiles(self):
         """Clear all loaded profiles."""
         self.profiles.clear()
+        self.profile_sources.clear()
     
     def get_profile_info(self, profile_name: str) -> Optional[Dict[str, Any]]:
         """Get detailed information about a specific profile."""

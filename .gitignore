@@ -27,7 +27,9 @@ ehthumbs.db
 Thumbs.db
 
 # Application specific
-output/*.txt
+output/
+*.csv
+*.aap
 *.pyc
 
 # Temporary files

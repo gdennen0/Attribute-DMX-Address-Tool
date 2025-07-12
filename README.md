@@ -6,7 +6,7 @@ A Python application for analyzing MVR (Model View Render) files and extracting 
 
 ### Requirements
 - Python 3.8 or higher
-- PyQt6 (installed automatically)
+- PyQt6 
 
 ### Installation
 
@@ -25,7 +25,7 @@ A Python application for analyzing MVR (Model View Render) files and extracting 
 ```
 AtrributeAddreser/
 ├── main.py              # Application entry point
-├── gui_new.py           # Main GUI interface
+├── gui.py               # Main GUI interface
 ├── controllers.py       # Application logic controllers
 ├── config.py            # Configuration management
 ├── config.json          # User settings and folder memory
@@ -44,8 +44,10 @@ AtrributeAddreser/
 1. Launch the application with `python main.py`
 2. Browse and select your MVR file
 3. The application automatically extracts fixture information and IDs
-4. Choose your preferred export format
-5. Click "Analyze" to generate results
+4. Click "Select Attributes" to choose which attributes to analyze per fixture type
+5. Choose your preferred export format (including MA3 XML if needed)
+6. Click "Analyze" to generate results
+7. Export results or save your project for later use
 
 ### What You Get
 The application creates organized reports showing:
@@ -56,6 +58,12 @@ The application creates organized reports showing:
 
 ## Features
 
+**Project Management**
+- Save and load projects with all settings (.aap files)
+- Recent projects menu for quick access
+- Auto-save protection with unsaved changes warnings
+- Separate attribute selection and analysis workflow
+
 **Smart Analysis**
 - Extracts fixture IDs from MVR files automatically
 - Calculates DMX addresses using the standard formula: `(Universe - 1) × 512 + Channel`
@@ -63,7 +71,7 @@ The application creates organized reports showing:
 - Matches fixtures with GDTF profiles when available
 
 **Organized Output**
-- Three export formats: Text (human-readable), CSV (spreadsheet-ready), JSON (structured data)
+- Four export formats: Text (human-readable), CSV (spreadsheet-ready), JSON (structured data), MA3 XML (GrandMA3 DMX remotes)
 - Hierarchical presentation with fixtures as parent containers
 - No redundant information - each fixture appears once with its attributes listed below
 - Professional formatting with clear visual separation
@@ -112,6 +120,16 @@ Load GDTF files for enhanced fixture matching and detailed attribute information
 - **Text**: Clean, hierarchical format perfect for documentation
 - **CSV**: Structured format with fixture/attribute row types for spreadsheet analysis
 - **JSON**: Nested structure with fixture info and attributes for programmatic use
+- **MA3 XML**: GrandMA3 DMX remote definitions for direct import into MA3 software
+
+**MA3 XML Features**
+- Creates individual DMX remotes for each fixture attribute
+- Remote names include fixture ID prefix for easy identification (e.g., "1_FixtureName_Dim")
+- Configurable trigger levels (DMX 0-255), input ranges (DMX 0-255), and output ranges (0-100%)
+- Supports 8bit, 16bit, and 24bit resolution
+- Color-coded trigger and input values (hex format)
+- Unique GUIDs for each remote
+- Direct import compatibility with GrandMA3 software
 
 ## Technical Notes
 

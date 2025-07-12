@@ -174,7 +174,7 @@ class MVRService:
         return None
     
     def analyze_fixtures(self, fixtures: List[FixtureMatch], selected_attributes: List[str], 
-                        output_format: str = "text") -> AnalysisResults:
+                        output_format: str = "text", ma3_config: dict = None) -> AnalysisResults:
         """
         Analyze fixtures and calculate addresses for selected attributes.
         
@@ -199,7 +199,7 @@ class MVRService:
         summary = self._generate_summary(fixtures_with_addresses, selected_attributes)
         
         # Generate export data
-        export_data = self._generate_export_data(fixtures_with_addresses, selected_attributes, output_format)
+        export_data = self._generate_export_data(fixtures_with_addresses, selected_attributes, output_format, ma3_config)
         
         # Generate validation info
         validation_info = self._generate_validation_info(fixtures, selected_attributes)
@@ -214,7 +214,7 @@ class MVRService:
         )
     
     def analyze_fixtures_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], 
-                                output_format: str = "text") -> AnalysisResults:
+                                output_format: str = "text", ma3_config: dict = None) -> AnalysisResults:
         """
         Analyze fixtures with per-fixture-type attributes.
         
@@ -245,7 +245,7 @@ class MVRService:
         summary = self._generate_summary_by_type(fixtures_with_addresses, fixture_type_attributes)
         
         # Generate export data
-        export_data = self._generate_export_data_by_type(fixtures_with_addresses, fixture_type_attributes, output_format)
+        export_data = self._generate_export_data_by_type(fixtures_with_addresses, fixture_type_attributes, output_format, ma3_config)
         
         # Generate validation info
         validation_info = self._generate_validation_info_by_type(fixtures, fixture_type_attributes)
@@ -281,7 +281,9 @@ class MVRService:
             if fixture.is_matched():
                 # Get attributes for this fixture type
                 fixture_type = fixture.gdtf_spec or "Unknown"
-                selected_attributes = fixture_type_attributes.get(fixture_type, [])
+                # Remove .gdtf extension for consistent naming
+                fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+                selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
                 
                 # Calculate addresses for this fixture
                 addresses = self._calculate_fixture_addresses(fixture, selected_attributes)
@@ -381,14 +383,16 @@ class MVRService:
         for fixture in fixtures:
             if fixture.is_matched() and hasattr(fixture, 'absolute_addresses'):
                 fixture_type = fixture.gdtf_spec or "Unknown"
+                # Remove .gdtf extension for consistent naming
+                fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
                 
                 # Track fixture type breakdown
-                if fixture_type not in summary["fixture_type_breakdown"]:
-                    summary["fixture_type_breakdown"][fixture_type] = {
+                if fixture_type_clean not in summary["fixture_type_breakdown"]:
+                    summary["fixture_type_breakdown"][fixture_type_clean] = {
                         "count": 0,
-                        "attributes": fixture_type_attributes.get(fixture_type, [])
+                        "attributes": fixture_type_attributes.get(fixture_type_clean, [])
                     }
-                summary["fixture_type_breakdown"][fixture_type]["count"] += 1
+                summary["fixture_type_breakdown"][fixture_type_clean]["count"] += 1
                 
                 for attr_name, addr_info in fixture.absolute_addresses.items():
                     universe = addr_info["universe"]
@@ -423,7 +427,7 @@ class MVRService:
         summary["universes_used"] = sorted(list(summary["universes_used"]))
         return summary
     
-    def _generate_export_data(self, fixtures: List[FixtureMatch], selected_attributes: List[str], output_format: str) -> str:
+    def _generate_export_data(self, fixtures: List[FixtureMatch], selected_attributes: List[str], output_format: str, ma3_config: dict = None) -> str:
         """Generate export data in the specified format."""
         if output_format == "text":
             return self._export_text(fixtures, selected_attributes)
@@ -431,10 +435,14 @@ class MVRService:
             return self._export_csv(fixtures, selected_attributes)
         elif output_format == "json":
             return self._export_json(fixtures, selected_attributes)
+        elif output_format == "ma3_xml":
+            if ma3_config is None:
+                raise ValueError("MA3 XML export requires configuration")
+            return self._export_ma3_xml(fixtures, selected_attributes, ma3_config)
         else:
             raise ValueError(f"Unsupported output format: {output_format}")
     
-    def _generate_export_data_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], output_format: str) -> str:
+    def _generate_export_data_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], output_format: str, ma3_config: dict = None) -> str:
         """Generate export data for per-fixture-type analysis."""
         if output_format == "text":
             return self._export_text_by_type(fixtures, fixture_type_attributes)
@@ -442,6 +450,10 @@ class MVRService:
             return self._export_csv_by_type(fixtures, fixture_type_attributes)
         elif output_format == "json":
             return self._export_json_by_type(fixtures, fixture_type_attributes)
+        elif output_format == "ma3_xml":
+            if ma3_config is None:
+                raise ValueError("MA3 XML export requires configuration")
+            return self._export_ma3_xml_by_type(fixtures, fixture_type_attributes, ma3_config)
         else:
             raise ValueError(f"Unsupported output format: {output_format}")
     
@@ -493,7 +505,9 @@ class MVRService:
         
         for fixture in sorted_fixtures:
             fixture_type = fixture.gdtf_spec or "Unknown"
-            selected_attributes = fixture_type_attributes.get(fixture_type, [])
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
             
             # Fixture header
             lines.append(f"━━━ FIXTURE {fixture.fixture_id}: {fixture.name} ━━━")
@@ -614,7 +628,9 @@ class MVRService:
         # Write data grouped by fixture
         for fixture in sorted_fixtures:
             fixture_type = fixture.gdtf_spec or "Unknown"
-            selected_attributes = fixture_type_attributes.get(fixture_type, [])
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
             
             if hasattr(fixture, 'absolute_addresses') and fixture.absolute_addresses:
                 # Get attributes for this fixture
@@ -745,7 +761,9 @@ class MVRService:
         
         for fixture in sorted_fixtures:
             fixture_type = fixture.gdtf_spec or "Unknown"
-            selected_attributes = fixture_type_attributes.get(fixture_type, [])
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
             
             # Build attributes list
             attributes_list = []
@@ -786,6 +804,128 @@ class MVRService:
         """Get current timestamp for export."""
         from datetime import datetime
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    def _export_ma3_xml(self, fixtures: List[FixtureMatch], selected_attributes: List[str], ma3_config: dict) -> str:
+        """Export results as MA3 XML format."""
+        import uuid
+        from xml.etree.ElementTree import Element, SubElement, tostring
+        from xml.dom import minidom
+        
+        # Create root element
+        root = Element("GMA3", DataVersion="2.2.5.2")
+        
+        # Sort fixtures by fixture_id in ascending order
+        sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
+                                key=lambda x: x.fixture_id)
+        
+        # Create a DMX remote for each attribute of each fixture
+        for fixture in sorted_fixtures:
+            if hasattr(fixture, 'absolute_addresses') and fixture.absolute_addresses:
+                for attr_name in selected_attributes:
+                    if attr_name in fixture.absolute_addresses:
+                        addr_info = fixture.absolute_addresses[attr_name]
+                        universe = addr_info["universe"]
+                        channel = addr_info["channel"]
+                        absolute_address = addr_info["absolute_address"]
+                        
+                        # Create DMX remote element
+                        dmx_remote = SubElement(root, "DmxRemote")
+                        
+                        # Set attributes (with fixture ID prefix)
+                        remote_name = f"{fixture.fixture_id}_{fixture.name}_{attr_name}"
+                        dmx_remote.set("Name", remote_name)
+                        dmx_remote.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                        dmx_remote.set("TriggerOn", self._value_to_hex(ma3_config["trigger_on"]))
+                        dmx_remote.set("TriggerOff", self._value_to_hex(ma3_config["trigger_off"]))
+                        dmx_remote.set("InFrom", self._value_to_hex(ma3_config["in_from"]))
+                        dmx_remote.set("InTo", self._value_to_hex(ma3_config["in_to"]))
+                        dmx_remote.set("OutFrom", f"{ma3_config['out_from']:6.1f}")
+                        dmx_remote.set("OutTo", f"{ma3_config['out_to']:6.1f}")
+                        dmx_remote.set("Address", f"{universe}.{channel:03d}")
+                        dmx_remote.set("Resolution", ma3_config["resolution"])
+        
+        # Convert to pretty-printed XML string
+        rough_string = tostring(root, encoding='unicode')
+        reparsed = minidom.parseString(rough_string)
+        pretty_xml = reparsed.toprettyxml(indent="    ", encoding=None)
+        
+        # Add proper XML declaration and format
+        lines = pretty_xml.split('\n')
+        # Filter out empty lines and fix formatting
+        filtered_lines = [line for line in lines if line.strip()]
+        
+        # Ensure proper XML declaration
+        if not filtered_lines[0].startswith('<?xml'):
+            filtered_lines.insert(0, '<?xml version="1.0" encoding="UTF-8"?>')
+        
+        return '\n'.join(filtered_lines)
+    
+    def _export_ma3_xml_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], ma3_config: dict) -> str:
+        """Export results as MA3 XML format with per-fixture-type attributes."""
+        import uuid
+        from xml.etree.ElementTree import Element, SubElement, tostring
+        from xml.dom import minidom
+        
+        # Create root element
+        root = Element("GMA3", DataVersion="2.2.5.2")
+        
+        # Sort fixtures by fixture_id in ascending order
+        sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
+                                key=lambda x: x.fixture_id)
+        
+        # Create a DMX remote for each attribute of each fixture
+        for fixture in sorted_fixtures:
+            fixture_type = fixture.gdtf_spec or "Unknown"
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
+            
+            if hasattr(fixture, 'absolute_addresses') and fixture.absolute_addresses:
+                for attr_name in selected_attributes:
+                    if attr_name in fixture.absolute_addresses:
+                        addr_info = fixture.absolute_addresses[attr_name]
+                        universe = addr_info["universe"]
+                        channel = addr_info["channel"]
+                        absolute_address = addr_info["absolute_address"]
+                        
+                        # Create DMX remote element
+                        dmx_remote = SubElement(root, "DmxRemote")
+                        
+                        # Set attributes (with fixture ID prefix)
+                        remote_name = f"{fixture.fixture_id}_{fixture.name}_{attr_name}"
+                        dmx_remote.set("Name", remote_name)
+                        dmx_remote.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                        dmx_remote.set("TriggerOn", self._value_to_hex(ma3_config["trigger_on"]))
+                        dmx_remote.set("TriggerOff", self._value_to_hex(ma3_config["trigger_off"]))
+                        dmx_remote.set("InFrom", self._value_to_hex(ma3_config["in_from"]))
+                        dmx_remote.set("InTo", self._value_to_hex(ma3_config["in_to"]))
+                        dmx_remote.set("OutFrom", f"{ma3_config['out_from']:6.1f}")
+                        dmx_remote.set("OutTo", f"{ma3_config['out_to']:6.1f}")
+                        dmx_remote.set("Address", f"{universe}.{channel:03d}")
+                        dmx_remote.set("Resolution", ma3_config["resolution"])
+        
+        # Convert to pretty-printed XML string
+        rough_string = tostring(root, encoding='unicode')
+        reparsed = minidom.parseString(rough_string)
+        pretty_xml = reparsed.toprettyxml(indent="    ", encoding=None)
+        
+        # Add proper XML declaration and format
+        lines = pretty_xml.split('\n')
+        # Filter out empty lines and fix formatting
+        filtered_lines = [line for line in lines if line.strip()]
+        
+        # Ensure proper XML declaration
+        if not filtered_lines[0].startswith('<?xml'):
+            filtered_lines.insert(0, '<?xml version="1.0" encoding="UTF-8"?>')
+        
+        return '\n'.join(filtered_lines)
+    
+    def _value_to_hex(self, value: int) -> str:
+        """Convert a numeric value to a 6-character hex color string."""
+        # For MA3, we convert the value to a hex color representation
+        # Values are treated as RGB components, so we repeat the hex value
+        hex_val = f"{value:02X}"
+        return hex_val + hex_val + hex_val
     
     def _generate_validation_info(self, fixtures: List[FixtureMatch], selected_attributes: List[str]) -> Dict[str, Any]:
         """Generate validation information."""
@@ -840,7 +980,7 @@ class MVRService:
         }
     
     def export_results(self, results: AnalysisResults, output_format: str, 
-                      save_path: Optional[str] = None) -> str:
+                      save_path: Optional[str] = None, ma3_config: dict = None) -> str:
         """
         Export analysis results to file or return as string.
         
@@ -848,11 +988,12 @@ class MVRService:
             results: AnalysisResults object
             output_format: Format to export to
             save_path: Optional path to save file
+            ma3_config: MA3 XML configuration if needed
             
         Returns:
             Export data as string
         """
-        export_data = self._generate_export_data(results.fixtures, results.selected_attributes, output_format)
+        export_data = self._generate_export_data(results.fixtures, results.selected_attributes, output_format, ma3_config)
         
         if save_path:
             try:
@@ -871,9 +1012,11 @@ class MVRService:
         fixture_types = {}
         for fixture in fixtures:
             fixture_type = fixture.gdtf_spec or "Unknown"
-            if fixture_type not in fixture_types:
-                fixture_types[fixture_type] = 0
-            fixture_types[fixture_type] += 1
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            if fixture_type_clean not in fixture_types:
+                fixture_types[fixture_type_clean] = 0
+            fixture_types[fixture_type_clean] += 1
         
         return {
             "total_fixtures": total,

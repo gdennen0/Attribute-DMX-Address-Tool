@@ -34,7 +34,17 @@ class Config:
             "output_directory": "output",
             "last_mvr_directory": "",
             "last_export_directory": "",
-            "last_gdtf_directory": ""
+            "last_gdtf_directory": "",
+            "external_gdtf_folder": "",
+            "ma3_xml_config": {
+                "trigger_on": 255,
+                "trigger_off": 0,
+                "in_from": 0,
+                "in_to": 255,
+                "out_from": 0.0,
+                "out_to": 100.0,
+                "resolution": "16bit"
+            }
         }
     
     def save_config(self):
@@ -115,6 +125,33 @@ class Config:
     def set_last_gdtf_directory(self, directory: str):
         """Set last used GDTF directory and save config."""
         self.config["last_gdtf_directory"] = directory
+        self.save_config()
+    
+    def get_external_gdtf_folder(self) -> str:
+        """Get external GDTF folder path."""
+        return self.config.get("external_gdtf_folder", "")
+    
+    def set_external_gdtf_folder(self, folder_path: str):
+        """Set external GDTF folder path and save config."""
+        self.config["external_gdtf_folder"] = folder_path
+        self.save_config()
+    
+    def get_ma3_xml_config(self) -> dict:
+        """Get MA3 XML configuration."""
+        default_config = {
+            "trigger_on": 255,
+            "trigger_off": 0,
+            "in_from": 0,
+            "in_to": 255,
+            "out_from": 0.0,
+            "out_to": 100.0,
+            "resolution": "16bit"
+        }
+        return self.config.get("ma3_xml_config", default_config)
+    
+    def set_ma3_xml_config(self, ma3_config: dict):
+        """Set MA3 XML configuration and save config."""
+        self.config["ma3_xml_config"] = ma3_config
         self.save_config()
     
     def get_available_attributes(self) -> List[str]:

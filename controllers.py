@@ -109,8 +109,17 @@ class MVRController:
             for fixture in self.matched_fixtures:
                 fixture_type = fixture.gdtf_spec or "Unknown"
                 
+                # Try exact match first
+                match_info = None
                 if fixture_type in fixture_type_matches:
                     match_info = fixture_type_matches[fixture_type]
+                else:
+                    # Try without .gdtf extension if exact match fails
+                    fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+                    if fixture_type_clean in fixture_type_matches:
+                        match_info = fixture_type_matches[fixture_type_clean]
+                
+                if match_info:
                     profile_name = match_info.get("profile", "")
                     mode_name = match_info.get("mode", "")
                     
@@ -146,7 +155,7 @@ class MVRController:
                 "details": traceback.format_exc()
             }
     
-    def analyze_fixtures(self, selected_attributes: List[str], output_format: str = "text") -> Dict[str, Any]:
+    def analyze_fixtures(self, selected_attributes: List[str], output_format: str = "text", ma3_config: dict = None) -> Dict[str, Any]:
         """
         Analyze fixtures with selected attributes (legacy method for backward compatibility).
         
@@ -166,7 +175,7 @@ class MVRController:
             
             # Run analysis
             results = self.mvr_service.analyze_fixtures(
-                self.matched_fixtures, selected_attributes, output_format
+                self.matched_fixtures, selected_attributes, output_format, ma3_config
             )
             
             # Store results
@@ -186,7 +195,7 @@ class MVRController:
                 "details": traceback.format_exc()
             }
     
-    def analyze_fixtures_by_type(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text") -> Dict[str, Any]:
+    def analyze_fixtures_by_type(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None) -> Dict[str, Any]:
         """
         Analyze fixtures with per-fixture-type attributes.
         
@@ -214,7 +223,7 @@ class MVRController:
             
             # Run analysis per fixture type
             results = self.mvr_service.analyze_fixtures_by_type(
-                self.matched_fixtures, fixture_type_attributes, output_format
+                self.matched_fixtures, fixture_type_attributes, output_format, ma3_config
             )
             
             # Store results
@@ -234,7 +243,7 @@ class MVRController:
                 "details": traceback.format_exc()
             }
     
-    def export_results(self, results: Dict[str, Any], output_format: str, file_path: str) -> Dict[str, Any]:
+    def export_results(self, results: Dict[str, Any], output_format: str, file_path: str, ma3_config: dict = None) -> Dict[str, Any]:
         """
         Export analysis results to a file.
         
@@ -242,6 +251,7 @@ class MVRController:
             results: Analysis results dictionary
             output_format: Format to export
             file_path: Path to save the file
+            ma3_config: MA3 XML configuration if needed
             
         Returns:
             Dict containing export status
@@ -257,7 +267,7 @@ class MVRController:
             
             # Export using the service
             export_data = self.mvr_service.export_results(
-                analysis_results, output_format, file_path
+                analysis_results, output_format, file_path, ma3_config
             )
             
             return {
@@ -278,8 +288,20 @@ class MVRController:
         return self.gdtf_service.get_available_attributes()
     
     def get_available_profiles(self) -> List[str]:
-        """Get all available GDTF profile names."""
+        """Get list of available GDTF profile names."""
         return self.gdtf_service.get_available_profiles()
+    
+    def get_profiles_by_source(self) -> Dict[str, List[str]]:
+        """Get GDTF profiles grouped by source (mvr or external)."""
+        return self.gdtf_service.get_profiles_by_source()
+    
+    def get_gdtf_loading_status(self) -> Dict[str, Any]:
+        """Get status of GDTF loading."""
+        profiles = self.gdtf_service.get_available_profiles()
+        return {
+            "available_profiles": profiles,
+            "profile_count": len(profiles)
+        }
     
     def get_profile_modes(self, profile_name: str) -> List[str]:
         """Get available modes for a specific GDTF profile."""
@@ -290,7 +312,9 @@ class MVRController:
         types = set()
         for fixture in self.matched_fixtures:
             fixture_type = fixture.gdtf_spec or "Unknown"
-            types.add(fixture_type)
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            types.add(fixture_type_clean)
         return sorted(list(types))
     
     def get_current_status(self) -> Dict[str, Any]:
@@ -313,19 +337,41 @@ class MVRController:
         fixture_types = {}
         for fixture in unmatched_fixtures:
             fixture_type = fixture.gdtf_spec or "Unknown"
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
             
-            if fixture_type not in fixture_types:
-                fixture_types[fixture_type] = {
+            if fixture_type_clean not in fixture_types:
+                fixture_types[fixture_type_clean] = {
                     'count': 0,
                     'sample_names': [],
                     'fixtures': []
                 }
             
-            fixture_types[fixture_type]['count'] += 1
-            fixture_types[fixture_type]['fixtures'].append(fixture)
+            fixture_types[fixture_type_clean]['count'] += 1
+            fixture_types[fixture_type_clean]['fixtures'].append(fixture)
             
             # Add sample names (up to 5)
-            if len(fixture_types[fixture_type]['sample_names']) < 5:
-                fixture_types[fixture_type]['sample_names'].append(fixture.name)
+            if len(fixture_types[fixture_type_clean]['sample_names']) < 5:
+                fixture_types[fixture_type_clean]['sample_names'].append(fixture.name)
         
         return fixture_types 
+
+    def get_current_fixture_type_matches(self) -> Dict[str, Dict[str, str]]:
+        """Get current fixture type matches (profile and mode per fixture type)."""
+        matches = {}
+        
+        # Get one fixture per type that is matched
+        seen_types = set()
+        for fixture in self.matched_fixtures:
+            fixture_type = fixture.gdtf_spec or "Unknown"
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            
+            if fixture_type_clean not in seen_types and fixture.is_matched() and fixture.gdtf_profile:
+                matches[fixture_type_clean] = {
+                    'profile': fixture.gdtf_profile.name,
+                    'mode': fixture.gdtf_mode
+                }
+                seen_types.add(fixture_type_clean)
+        
+        return matches 

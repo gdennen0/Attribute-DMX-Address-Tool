@@ -24,14 +24,18 @@ class FixtureAttributeDialog(QDialog):
     Uses controller for all business logic.
     """
     
-    def __init__(self, parent, controller: MVRController, config=None):
+    def __init__(self, parent, controller: MVRController, config=None, existing_fixture_type_attributes=None):
         super().__init__(parent)
         self.controller = controller
         self.config = config
+        self.existing_fixture_type_attributes = existing_fixture_type_attributes or {}
         self.fixture_type_controls = {}
         self.fixture_type_attributes = {}  # Store selected attributes per fixture type
         self.setup_ui()
         self.load_fixture_types()
+        
+        # Load existing selections into the dialog
+        self.load_existing_selections()
     
     def setup_ui(self):
         """Create the dialog interface."""
@@ -125,9 +129,11 @@ class FixtureAttributeDialog(QDialog):
         fixture_types = {}
         for fixture in all_fixtures:
             fixture_type = fixture.gdtf_spec or "Unknown"
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
             
-            if fixture_type not in fixture_types:
-                fixture_types[fixture_type] = {
+            if fixture_type_clean not in fixture_types:
+                fixture_types[fixture_type_clean] = {
                     'count': 0,
                     'sample_names': [],
                     'fixtures': [],
@@ -135,21 +141,21 @@ class FixtureAttributeDialog(QDialog):
                     'available_attributes': set()
                 }
             
-            fixture_types[fixture_type]['count'] += 1
-            fixture_types[fixture_type]['fixtures'].append(fixture)
+            fixture_types[fixture_type_clean]['count'] += 1
+            fixture_types[fixture_type_clean]['fixtures'].append(fixture)
             
             # Track matched fixtures
             if fixture.is_matched():
-                fixture_types[fixture_type]['matched_count'] += 1
+                fixture_types[fixture_type_clean]['matched_count'] += 1
                 # Get attributes for this fixture type
                 if fixture.matched_mode:
-                    fixture_types[fixture_type]['available_attributes'].update(
+                    fixture_types[fixture_type_clean]['available_attributes'].update(
                         fixture.matched_mode.channels.keys()
                     )
             
             # Add sample names (up to 5)
-            if len(fixture_types[fixture_type]['sample_names']) < 5:
-                fixture_types[fixture_type]['sample_names'].append(fixture.name)
+            if len(fixture_types[fixture_type_clean]['sample_names']) < 5:
+                fixture_types[fixture_type_clean]['sample_names'].append(fixture.name)
         
         # Convert attributes set to sorted list
         for fixture_type in fixture_types:
@@ -328,3 +334,18 @@ class FixtureAttributeDialog(QDialog):
         """Accept the dialog if selections are valid."""
         if self.validate_selections():
             super().accept() 
+
+    def load_existing_selections(self):
+        """Load existing attribute selections into the dialog."""
+        if not self.existing_fixture_type_attributes:
+            return
+            
+        for fixture_type, selected_attributes in self.existing_fixture_type_attributes.items():
+            if fixture_type in self.fixture_type_controls:
+                controls = self.fixture_type_controls[fixture_type]
+                checkboxes = controls['checkboxes']
+                
+                # Check the previously selected attributes
+                for attr_name in selected_attributes:
+                    if attr_name in checkboxes:
+                        checkboxes[attr_name].setChecked(True) 

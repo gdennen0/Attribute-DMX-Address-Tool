@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QMessageBox, QFrame
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QColor
 
 from controllers import MVRController
 
@@ -31,16 +31,22 @@ class GDTFMatchingDialog(QDialog):
         self.fixture_type_controls = {}
         self.setup_ui()
         self.load_unmatched_fixtures()
+        
+        # Load saved external GDTF folder if available
+        if self.config:
+            external_folder = self.config.get_external_gdtf_folder()
+            if external_folder and os.path.exists(external_folder):
+                self.load_external_gdtf_profiles(external_folder)
     
     def setup_ui(self):
         """Create the dialog interface."""
-        self.setWindowTitle("GDTF Profile Matching")
+        self.setWindowTitle("GDTF Profile Matching & Editing")
         self.setGeometry(200, 200, 1000, 700)
         
         layout = QVBoxLayout(self)
         
         # Title
-        title = QLabel("Match Fixture Types to GDTF Profiles")
+        title = QLabel("Match & Edit Fixture Types to GDTF Profiles")
         title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         layout.addWidget(title)
         
@@ -66,8 +72,9 @@ class GDTFMatchingDialog(QDialog):
         
         # Instructions
         instructions = QLabel(
-            "Select the appropriate GDTF profile and mode for each fixture type. "
-            "All fixtures of the same type will use the same profile and mode."
+            "Select or edit the GDTF profile and mode for each fixture type. "
+            "All fixtures of the same type will use the same profile and mode. "
+            "✓ = Fully matched, ⚠ = Partially matched, ✗ = Not matched"
         )
         instructions.setWordWrap(True)
         instructions.setStyleSheet("color: #666; margin: 10px 0;")
@@ -98,7 +105,7 @@ class GDTFMatchingDialog(QDialog):
         layout.addLayout(button_layout)
     
     def load_unmatched_fixtures(self):
-        """Load unmatched fixtures from controller and create UI."""
+        """Load all fixtures from controller and create UI for matching/editing."""
         # Clear existing controls
         for control in self.fixture_type_controls.values():
             control['group'].setParent(None)
@@ -109,12 +116,12 @@ class GDTFMatchingDialog(QDialog):
         if not status["file_loaded"]:
             return
         
-        # Get fixture information grouped by type
-        fixture_info = self._get_fixture_type_info()
+        # Get fixture information grouped by type (all fixtures, not just unmatched)
+        fixture_info = self._get_all_fixture_type_info()
         
         if not fixture_info:
-            no_fixtures_label = QLabel("No fixtures need manual matching.")
-            no_fixtures_label.setStyleSheet("color: green; font-weight: bold; padding: 20px;")
+            no_fixtures_label = QLabel("No fixtures loaded.")
+            no_fixtures_label.setStyleSheet("color: red; font-weight: bold; padding: 20px;")
             self.fixture_layout.addWidget(no_fixtures_label)
             return
         
@@ -127,16 +134,112 @@ class GDTFMatchingDialog(QDialog):
         """Get fixture type information from controller."""
         return self.controller.get_unmatched_fixture_types()
     
+    def _get_all_fixture_type_info(self) -> Dict[str, Dict]:
+        """Get all fixture type information from controller (both matched and unmatched)."""
+        # Get all fixtures from controller
+        all_fixtures = self.controller.matched_fixtures
+        
+        if not all_fixtures:
+            return {}
+        
+        # Group by fixture type
+        fixture_types = {}
+        for fixture in all_fixtures:
+            fixture_type = fixture.gdtf_spec or "Unknown"
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            
+            if fixture_type_clean not in fixture_types:
+                fixture_types[fixture_type_clean] = {
+                    'count': 0,
+                    'sample_names': [],
+                    'fixtures': [],
+                    'matched_count': 0,
+                    'current_match': None  # Store current match info
+                }
+            
+            fixture_types[fixture_type_clean]['count'] += 1
+            fixture_types[fixture_type_clean]['fixtures'].append(fixture)
+            
+            # Track matched fixtures and get current match info
+            if fixture.is_matched():
+                fixture_types[fixture_type_clean]['matched_count'] += 1
+                if fixture_types[fixture_type_clean]['current_match'] is None:
+                    fixture_types[fixture_type_clean]['current_match'] = {
+                        'profile': fixture.gdtf_profile.name if fixture.gdtf_profile else None,
+                        'mode': fixture.gdtf_mode
+                    }
+            
+            # Add sample names (up to 5)
+            if len(fixture_types[fixture_type_clean]['sample_names']) < 5:
+                fixture_types[fixture_type_clean]['sample_names'].append(fixture.name)
+        
+        return fixture_types
+    
+    def _populate_profile_combo(self, profile_combo: QComboBox):
+        """Populate a profile combo box with sections for MVR and external profiles."""
+        profiles_by_source = self.controller.get_profiles_by_source()
+        
+        # Add MVR profiles section
+        mvr_profiles = profiles_by_source.get('mvr', [])
+        if mvr_profiles:
+            # Add section divider
+            divider_index = profile_combo.count()
+            profile_combo.addItem("── MVR GDTF PROFILES ──", "")
+            # Style the divider item and make it unselectable
+            item = profile_combo.model().item(divider_index)
+            item.setEnabled(False)
+            # Make the text bold and different color
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
+            item.setForeground(QColor(100, 100, 100))  # Gray color
+            
+            # Add MVR profiles with indentation
+            for profile_name in mvr_profiles:
+                profile_combo.addItem(f"  {profile_name}", profile_name)
+        
+        # Add External profiles section
+        external_profiles = profiles_by_source.get('external', [])
+        if external_profiles:
+            # Add section divider
+            divider_index = profile_combo.count()
+            profile_combo.addItem("── EXTERNAL GDTF PROFILES ──", "")
+            # Style the divider item and make it unselectable
+            item = profile_combo.model().item(divider_index)
+            item.setEnabled(False)
+            # Make the text bold and different color
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
+            item.setForeground(QColor(100, 100, 100))  # Gray color
+            
+            # Add external profiles with indentation
+            for profile_name in external_profiles:
+                profile_combo.addItem(f"  {profile_name}", profile_name)
+    
     def create_fixture_type_control(self, fixture_type: str, info: Dict) -> QWidget:
         """Create UI controls for a fixture type."""
-        group = QGroupBox(f"Fixture Type: {fixture_type}")
-        group.setStyleSheet("QGroupBox { font-weight: bold; margin-top: 10px; }")
-        layout = QGridLayout(group)
+        # Determine match status
+        matched_count = info.get('matched_count', 0)
+        total_count = info.get('count', 0)
+        current_match = info.get('current_match')
+        is_fully_matched = matched_count == total_count and matched_count > 0
         
-        # Fixture count
-        count_label = QLabel(f"Fixtures: {info.get('count', 0)}")
-        count_label.setStyleSheet("color: #666;")
-        layout.addWidget(count_label, 0, 0)
+        # Create group with status indication
+        if is_fully_matched:
+            group_title = f"✓ {fixture_type} (All {total_count} matched)"
+            group_style = "QGroupBox { font-weight: bold; margin-top: 10px; color: green; }"
+        elif matched_count > 0:
+            group_title = f"⚠ {fixture_type} ({matched_count}/{total_count} matched)"
+            group_style = "QGroupBox { font-weight: bold; margin-top: 10px; color: orange; }"
+        else:
+            group_title = f"✗ {fixture_type} (0/{total_count} matched)"
+            group_style = "QGroupBox { font-weight: bold; margin-top: 10px; color: red; }"
+        
+        group = QGroupBox(group_title)
+        group.setStyleSheet(group_style)
+        layout = QGridLayout(group)
         
         # Sample fixture names
         sample_names = info.get('sample_names', [])
@@ -146,17 +249,21 @@ class GDTFMatchingDialog(QDialog):
                 names_text += f" ... and {len(sample_names) - 3} more"
             sample_label = QLabel(f"Examples: {names_text}")
             sample_label.setStyleSheet("color: #666;")
-            layout.addWidget(sample_label, 0, 1)
+            layout.addWidget(sample_label, 0, 0, 1, 2)
         
         # Profile selection
         layout.addWidget(QLabel("GDTF Profile:"), 1, 0)
         profile_combo = QComboBox()
         profile_combo.addItem("-- Select Profile --", "")
         
-        # Add available profiles
-        available_profiles = self.controller.get_available_profiles()
-        for profile_name in available_profiles:
-            profile_combo.addItem(profile_name, profile_name)
+        # Add profiles grouped by source with dividers
+        self._populate_profile_combo(profile_combo)
+        
+        # Pre-populate with current match if it exists
+        if current_match and current_match.get('profile'):
+            index = profile_combo.findData(current_match['profile'])
+            if index >= 0:
+                profile_combo.setCurrentIndex(index)
         
         profile_combo.currentTextChanged.connect(
             lambda text, ft=fixture_type: self.on_profile_changed(ft, text)
@@ -167,6 +274,19 @@ class GDTFMatchingDialog(QDialog):
         layout.addWidget(QLabel("GDTF Mode:"), 2, 0)
         mode_combo = QComboBox()
         mode_combo.addItem("-- Select Mode --", "")
+        
+        # If we have a current profile selected, populate modes
+        if current_match and current_match.get('profile'):
+            modes = self.controller.get_profile_modes(current_match['profile'])
+            for mode_name in modes:
+                mode_combo.addItem(mode_name, mode_name)
+            
+            # Pre-populate with current mode if it exists
+            if current_match.get('mode'):
+                index = mode_combo.findData(current_match['mode'])
+                if index >= 0:
+                    mode_combo.setCurrentIndex(index)
+        
         layout.addWidget(mode_combo, 2, 1)
         
         # Store references
@@ -198,10 +318,11 @@ class GDTFMatchingDialog(QDialog):
             # Save the directory for next time
             if self.config:
                 self.config.set_last_gdtf_directory(folder_path)
+                self.config.set_external_gdtf_folder(folder_path)
             self.load_external_gdtf_profiles(folder_path)
     
     def load_external_gdtf_profiles(self, folder_path: str):
-        """Load external GDTF profiles."""
+        """Load external GDTF profiles while preserving current selections."""
         try:
             result = self.controller.load_external_gdtf_profiles(folder_path)
             
@@ -213,11 +334,11 @@ class GDTFMatchingDialog(QDialog):
                 self.folder_label.setStyleSheet("color: black; font-weight: bold;")
                 
                 self.profiles_info.setText(
-                    f"Loaded {profiles_loaded} external GDTF profiles"
+                    f"Added {profiles_loaded} external GDTF profiles (current selections preserved)"
                 )
                 self.profiles_info.setStyleSheet("color: green;")
                 
-                # Update all profile dropdowns
+                # Update all profile dropdowns while preserving current selections
                 self.update_profile_dropdowns()
                 
             else:
@@ -235,25 +356,41 @@ class GDTFMatchingDialog(QDialog):
             )
     
     def update_profile_dropdowns(self):
-        """Update all profile dropdown menus."""
-        available_profiles = self.controller.get_available_profiles()
-        
-        for controls in self.fixture_type_controls.values():
+        """Update all profile dropdown menus while preserving current selections."""
+        for fixture_type, controls in self.fixture_type_controls.items():
             profile_combo = controls['profile_combo']
-            current_selection = profile_combo.currentData()
+            mode_combo = controls['mode_combo']
             
-            # Clear and repopulate
+            # Save current selections
+            current_profile = profile_combo.currentData()
+            current_mode = mode_combo.currentData()
+            
+            # Clear and repopulate profile dropdown
             profile_combo.clear()
             profile_combo.addItem("-- Select Profile --", "")
             
-            for profile_name in available_profiles:
-                profile_combo.addItem(profile_name, profile_name)
+            # Add profiles with sections
+            self._populate_profile_combo(profile_combo)
             
-            # Restore selection if it still exists
-            if current_selection:
-                index = profile_combo.findData(current_selection)
+            # Restore profile selection if it still exists
+            if current_profile:
+                index = profile_combo.findData(current_profile)
                 if index >= 0:
                     profile_combo.setCurrentIndex(index)
+                    
+                    # Repopulate modes for the selected profile
+                    mode_combo.clear()
+                    mode_combo.addItem("-- Select Mode --", "")
+                    
+                    modes = self.controller.get_profile_modes(current_profile)
+                    for mode_name in modes:
+                        mode_combo.addItem(mode_name, mode_name)
+                    
+                    # Restore mode selection if it still exists
+                    if current_mode:
+                        mode_index = mode_combo.findData(current_mode)
+                        if mode_index >= 0:
+                            mode_combo.setCurrentIndex(mode_index)
     
     def on_profile_changed(self, fixture_type: str, profile_name: str):
         """Handle profile selection change."""
