@@ -35,6 +35,7 @@ class Config:
             "last_mvr_directory": "",
             "last_export_directory": "",
             "last_gdtf_directory": "",
+            "last_csv_directory": "",  # New: last used CSV directory
             "external_gdtf_folder": "",
             "ma3_xml_config": {
                 "trigger_on": 255,
@@ -125,6 +126,15 @@ class Config:
     def set_last_gdtf_directory(self, directory: str):
         """Set last used GDTF directory and save config."""
         self.config["last_gdtf_directory"] = directory
+        self.save_config()
+    
+    def get_last_csv_directory(self) -> str:
+        """Get last used CSV directory."""
+        return self.config.get("last_csv_directory", "")
+    
+    def set_last_csv_directory(self, directory: str):
+        """Set last used CSV directory and save config."""
+        self.config["last_csv_directory"] = directory
         self.save_config()
     
     def get_external_gdtf_folder(self) -> str:

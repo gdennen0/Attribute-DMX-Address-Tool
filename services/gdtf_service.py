@@ -215,81 +215,72 @@ class GDTFService:
         except Exception:
             return None
     
-    def match_fixtures(self, fixture_data_list: List[Dict], profiles: Dict[str, GDTFProfile]) -> List[FixtureMatch]:
+    def match_fixture_objects(self, fixtures: List[FixtureMatch], profiles: Dict[str, GDTFProfile] = None) -> List[FixtureMatch]:
         """
-        Match fixtures to GDTF profiles.
+        Match FixtureMatch objects to GDTF profiles.
         
         Args:
-            fixture_data_list: List of fixture data dictionaries
-            profiles: Available GDTF profiles
+            fixtures: List of FixtureMatch objects to match
+            profiles: Available GDTF profiles (if None, uses all loaded profiles)
             
         Returns:
-            List of FixtureMatch objects
+            List of FixtureMatch objects with updated match status
         """
+        if profiles is None:
+            profiles = self.profiles
+        
         matched_fixtures = []
         
-        for fixture_data in fixture_data_list:
-            match = self._match_single_fixture(fixture_data, profiles)
-            matched_fixtures.append(match)
+        for fixture in fixtures:
+            # Try to match the fixture
+            matched_fixture = self._match_fixture_object(fixture, profiles)
+            matched_fixtures.append(matched_fixture)
         
         return matched_fixtures
     
-    def _match_single_fixture(self, fixture_data: Dict, profiles: Dict[str, GDTFProfile]) -> FixtureMatch:
-        """Match a single fixture to its GDTF profile."""
-        name = fixture_data.get('name', 'Unknown')
-        uuid = fixture_data.get('uuid', '')
-        gdtf_spec = fixture_data.get('gdtf_spec', '')
-        gdtf_mode = fixture_data.get('gdtf_mode', '')
-        base_address = fixture_data.get('base_address', 1)
-        fixture_id = fixture_data.get('fixture_id', 0)
+    def _match_fixture_object(self, fixture: FixtureMatch, profiles: Dict[str, GDTFProfile]) -> FixtureMatch:
+        """
+        Match a single FixtureMatch object to GDTF profiles.
         
-        # Try to find the GDTF profile
-        gdtf_profile = profiles.get(gdtf_spec)
+        Args:
+            fixture: FixtureMatch object to match
+            profiles: Available GDTF profiles
+            
+        Returns:
+            Updated FixtureMatch object with match status
+        """
+        # Try exact match only
+        gdtf_profile = profiles.get(fixture.gdtf_spec)
         
         if not gdtf_profile:
-            return FixtureMatch(
-                name=name,
-                uuid=uuid,
-                gdtf_spec=gdtf_spec,
-                gdtf_mode=gdtf_mode,
-                base_address=base_address,
-                fixture_id=fixture_id,
-                gdtf_profile=None,
-                matched_mode=None,
-                attribute_offsets={},
-                match_status="gdtf_missing"
-            )
+            # No profile found
+            fixture.match_status = "gdtf_missing"
+            return fixture
         
         # Try to find the mode
-        matched_mode = gdtf_profile.get_mode(gdtf_mode)
+        matched_mode = gdtf_profile.get_mode(fixture.gdtf_mode)
         
         if not matched_mode:
-            return FixtureMatch(
-                name=name,
-                uuid=uuid,
-                gdtf_spec=gdtf_spec,
-                gdtf_mode=gdtf_mode,
-                base_address=base_address,
-                fixture_id=fixture_id,
-                gdtf_profile=gdtf_profile,
-                matched_mode=None,
-                attribute_offsets={},
-                match_status="mode_missing"
-            )
+            # Try to find a default mode (first available)
+            mode_names = gdtf_profile.get_mode_names()
+            if mode_names:
+                matched_mode = gdtf_profile.get_mode(mode_names[0])
+                if matched_mode:
+                    fixture.gdtf_mode = mode_names[0]
+        
+        if not matched_mode:
+            # Profile found but no suitable mode
+            fixture.gdtf_profile = gdtf_profile
+            fixture.match_status = "mode_missing"
+            return fixture
         
         # Successfully matched
-        return FixtureMatch(
-            name=name,
-            uuid=uuid,
-            gdtf_spec=gdtf_spec,
-            gdtf_mode=gdtf_mode,
-            base_address=base_address,
-            fixture_id=fixture_id,
-            gdtf_profile=gdtf_profile,
-            matched_mode=matched_mode,
-            attribute_offsets=matched_mode.channels.copy(),
-            match_status="matched"
-        )
+        fixture.gdtf_profile = gdtf_profile
+        fixture.matched_mode = matched_mode
+        fixture.attribute_offsets = matched_mode.channels.copy()
+        fixture.match_status = "matched"
+        
+        return fixture
     
     def apply_profile_to_fixture(self, fixture: FixtureMatch, profile_name: str, mode_name: str) -> FixtureMatch:
         """

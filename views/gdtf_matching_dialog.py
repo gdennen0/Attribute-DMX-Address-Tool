@@ -111,6 +111,12 @@ class GDTFMatchingDialog(QDialog):
             control['group'].setParent(None)
         self.fixture_type_controls.clear()
         
+        # Clear any existing guidance widgets
+        for i in reversed(range(self.fixture_layout.count())):
+            widget = self.fixture_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
+        
         # Get current status
         status = self.controller.get_current_status()
         if not status["file_loaded"]:
@@ -124,6 +130,14 @@ class GDTFMatchingDialog(QDialog):
             no_fixtures_label.setStyleSheet("color: red; font-weight: bold; padding: 20px;")
             self.fixture_layout.addWidget(no_fixtures_label)
             return
+        
+        # Check if we have any GDTF profiles available
+        profiles_by_source = self.controller.get_profiles_by_source()
+        has_profiles = bool(profiles_by_source.get('mvr', []) or profiles_by_source.get('external', []))
+        
+        if not has_profiles:
+            # Show guidance for CSV imports or when no profiles are available
+            self._show_no_profiles_guidance()
         
         # Create matching controls for each fixture type
         for fixture_type, info in fixture_info.items():
@@ -176,7 +190,7 @@ class GDTFMatchingDialog(QDialog):
         
         return fixture_types
     
-    def _populate_profile_combo(self, profile_combo: QComboBox):
+    def _populate_profile_combo(self, profile_combo: QComboBox, fixture_type: str = None):
         """Populate a profile combo box with sections for MVR and external profiles."""
         profiles_by_source = self.controller.get_profiles_by_source()
         
@@ -257,7 +271,7 @@ class GDTFMatchingDialog(QDialog):
         profile_combo.addItem("-- Select Profile --", "")
         
         # Add profiles grouped by source with dividers
-        self._populate_profile_combo(profile_combo)
+        self._populate_profile_combo(profile_combo, fixture_type)
         
         # Pre-populate with current match if it exists
         if current_match and current_match.get('profile'):
@@ -265,8 +279,8 @@ class GDTFMatchingDialog(QDialog):
             if index >= 0:
                 profile_combo.setCurrentIndex(index)
         
-        profile_combo.currentTextChanged.connect(
-            lambda text, ft=fixture_type: self.on_profile_changed(ft, text)
+        profile_combo.currentIndexChanged.connect(
+            lambda index, ft=fixture_type, combo=profile_combo: self.on_profile_changed(ft, combo.currentData())
         )
         layout.addWidget(profile_combo, 1, 1)
         
@@ -334,12 +348,12 @@ class GDTFMatchingDialog(QDialog):
                 self.folder_label.setStyleSheet("color: black; font-weight: bold;")
                 
                 self.profiles_info.setText(
-                    f"Added {profiles_loaded} external GDTF profiles (current selections preserved)"
+                    f"Added {profiles_loaded} external GDTF profiles"
                 )
                 self.profiles_info.setStyleSheet("color: green;")
                 
-                # Update all profile dropdowns while preserving current selections
-                self.update_profile_dropdowns()
+                # Always refresh the entire dialog when new profiles are loaded
+                self.load_unmatched_fixtures()
                 
             else:
                 QMessageBox.critical(
@@ -369,8 +383,8 @@ class GDTFMatchingDialog(QDialog):
             profile_combo.clear()
             profile_combo.addItem("-- Select Profile --", "")
             
-            # Add profiles with sections
-            self._populate_profile_combo(profile_combo)
+            # Add profiles with sections and suggestions
+            self._populate_profile_combo(profile_combo, fixture_type)
             
             # Restore profile selection if it still exists
             if current_profile:
@@ -428,3 +442,37 @@ class GDTFMatchingDialog(QDialog):
                 }
         
         return matches 
+
+    def _show_no_profiles_guidance(self):
+        """Show guidance when no GDTF profiles are available."""
+        guidance_frame = QFrame()
+        guidance_frame.setStyleSheet("background-color: #FFF3CD; border: 1px solid #F5C2C7; border-radius: 5px; padding: 10px; margin: 10px;")
+        guidance_layout = QVBoxLayout(guidance_frame)
+        
+        title = QLabel("⚠ No GDTF Profiles Available")
+        title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        title.setStyleSheet("color: #664D03; margin-bottom: 10px;")
+        guidance_layout.addWidget(title)
+        
+        # Different guidance based on import type
+        import_type = getattr(self.controller, 'current_import_type', 'unknown')
+        if import_type == 'csv':
+            guidance_text = (
+                "CSV imports don't contain GDTF profiles. To match fixture types and analyze DMX addresses, "
+                "you need to load external GDTF profiles.\n\n"
+                "Please use the 'Browse External GDTF Folder' button above to select a folder containing "
+                "GDTF files (.gdtf), then return here to match your fixture types."
+            )
+        else:
+            guidance_text = (
+                "No GDTF profiles are currently loaded. You can:\n"
+                "1. Load external GDTF profiles using the 'Browse External GDTF Folder' button above\n"
+                "2. If you loaded an MVR file, make sure it contains GDTF profiles"
+            )
+        
+        guidance_label = QLabel(guidance_text)
+        guidance_label.setWordWrap(True)
+        guidance_label.setStyleSheet("color: #664D03; line-height: 1.4;")
+        guidance_layout.addWidget(guidance_label)
+        
+        self.fixture_layout.addWidget(guidance_frame) 

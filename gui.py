@@ -13,7 +13,8 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QTextEdit, QCheckBox,
     QGroupBox, QScrollArea, QComboBox, QProgressBar, QMessageBox,
-    QFrame, QGridLayout, QDialog, QMenuBar, QMenu
+    QFrame, QGridLayout, QDialog, QMenuBar, QMenu, QRadioButton,
+    QButtonGroup
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
 from PyQt6.QtGui import QFont, QAction
@@ -24,6 +25,7 @@ from config import Config
 from views.gdtf_matching_dialog import GDTFMatchingDialog
 from views.fixture_attribute_dialog import FixtureAttributeDialog
 from views.ma3_xml_dialog import MA3XMLDialog
+from views.csv_import_dialog import CSVImportDialog
 
 
 class AnalysisWorker(QThread):
@@ -188,14 +190,38 @@ class MVRApp(QMainWindow):
         file_group = QGroupBox("1. File Selection")
         file_layout = QVBoxLayout(file_group)
         
+        # Import type selection
+        import_type_layout = QHBoxLayout()
+        import_type_layout.addWidget(QLabel("Import Type:"))
+        
+        self.import_type_group = QButtonGroup()
+        self.mvr_radio = QRadioButton("MVR File")
+        self.csv_radio = QRadioButton("CSV File")
+        self.mvr_radio.setChecked(True)  # Default to MVR
+        
+        self.import_type_group.addButton(self.mvr_radio)
+        self.import_type_group.addButton(self.csv_radio)
+        
+        import_type_layout.addWidget(self.mvr_radio)
+        import_type_layout.addWidget(self.csv_radio)
+        import_type_layout.addStretch()
+        
+        file_layout.addLayout(import_type_layout)
+        
+        # File status label
         self.file_label = QLabel("No file selected")
         self.file_label.setWordWrap(True)
         self.file_label.setStyleSheet("padding: 10px; border: 1px solid #ccc; border-radius: 4px;")
         file_layout.addWidget(self.file_label)
         
-        browse_btn = QPushButton("Browse MVR File...")
-        browse_btn.clicked.connect(self.browse_file)
-        file_layout.addWidget(browse_btn)
+        # Browse button
+        self.browse_btn = QPushButton("Browse MVR File...")
+        self.browse_btn.clicked.connect(self.browse_file)
+        file_layout.addWidget(self.browse_btn)
+        
+        # Connect radio buttons to update browse button text
+        self.mvr_radio.toggled.connect(self.update_browse_button)
+        self.csv_radio.toggled.connect(self.update_browse_button)
         
         layout.addWidget(file_group)
         
@@ -203,14 +229,23 @@ class MVRApp(QMainWindow):
         gdtf_group = QGroupBox("2. GDTF Profile Matching")
         gdtf_layout = QVBoxLayout(gdtf_group)
         
-        self.gdtf_status_label = QLabel("Load an MVR file first")
+        self.gdtf_status_label = QLabel("Load a file first")
         self.gdtf_status_label.setWordWrap(True)
         self.gdtf_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
         gdtf_layout.addWidget(self.gdtf_status_label)
         
+        # External GDTF button (for CSV imports)
+        self.load_external_gdtf_btn = QPushButton("Load External GDTF Profiles")
+        self.load_external_gdtf_btn.clicked.connect(self.load_external_gdtf_profiles)
+        self.load_external_gdtf_btn.setEnabled(False)
+        self.load_external_gdtf_btn.setToolTip("Load GDTF profiles from a folder (required for CSV imports)")
+        gdtf_layout.addWidget(self.load_external_gdtf_btn)
+        
+        # Manual matching button
         self.match_gdtf_btn = QPushButton("Match GDTF Profiles")
         self.match_gdtf_btn.clicked.connect(self.match_gdtf_profiles)
         self.match_gdtf_btn.setEnabled(False)
+        self.match_gdtf_btn.setToolTip("Match fixture types to GDTF profiles")
         gdtf_layout.addWidget(self.match_gdtf_btn)
         
         layout.addWidget(gdtf_group)
@@ -281,27 +316,21 @@ class MVRApp(QMainWindow):
         
         return panel
     
-    def create_right_panel(self) -> QWidget:
-        """Create the right results panel."""
-        panel = QFrame()
-        panel.setFrameStyle(QFrame.Shape.StyledPanel)
-        layout = QVBoxLayout(panel)
-        
-        # Results title
-        title = QLabel("Analysis Results")
-        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        layout.addWidget(title)
-        
-        # Results text area
-        self.results_text = QTextEdit()
-        self.results_text.setReadOnly(True)
-        self.results_text.setFont(QFont("Courier", 10))
-        self.results_text.setPlainText("No analysis results yet.\n\nPlease:\n1. Load an MVR file\n2. Match GDTF profiles\n3. Select attributes per fixture type\n4. Run analysis")
-        layout.addWidget(self.results_text)
-        
-        return panel
+    def update_browse_button(self):
+        """Update the browse button text based on selected import type."""
+        if self.mvr_radio.isChecked():
+            self.browse_btn.setText("Browse MVR File...")
+        else:
+            self.browse_btn.setText("Browse CSV File...")
     
     def browse_file(self):
+        """Open file dialog to select MVR or CSV file based on selection."""
+        if self.mvr_radio.isChecked():
+            self.browse_mvr_file()
+        else:
+            self.browse_csv_file()
+    
+    def browse_mvr_file(self):
         """Open file dialog to select MVR file."""
         # Get last used directory
         last_dir = self.config.get_last_mvr_directory()
@@ -318,6 +347,64 @@ class MVRApp(QMainWindow):
             # Save the directory for next time
             self.config.set_last_mvr_directory(str(Path(file_path).parent))
             self.load_mvr_file(file_path)
+    
+    def create_right_panel(self) -> QWidget:
+        """Create the right results panel."""
+        panel = QFrame()
+        panel.setFrameStyle(QFrame.Shape.StyledPanel)
+        layout = QVBoxLayout(panel)
+        
+        # Results title
+        title = QLabel("Analysis Results")
+        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        layout.addWidget(title)
+        
+        # Results text area
+        self.results_text = QTextEdit()
+        self.results_text.setReadOnly(True)
+        self.results_text.setFont(QFont("Courier", 10))
+        self.results_text.setPlainText("No analysis results yet.\n\nPlease:\n1. Load a file (MVR or CSV)\n2. Match GDTF profiles\n3. Select attributes per fixture type\n4. Run analysis")
+        layout.addWidget(self.results_text)
+        
+        return panel
+    
+    def browse_csv_file(self):
+        """Open CSV import dialog."""
+        try:
+            dialog = CSVImportDialog(self, self.config)
+            
+            # Connect the import successful signal
+            dialog.import_successful.connect(self.load_csv_fixtures)
+            
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error opening CSV import dialog:\n{str(e)}")
+    
+    def load_csv_fixtures(self, fixture_matches: List):
+        """Load fixtures from CSV import."""
+        try:
+            result = self.controller.load_csv_fixtures(fixture_matches)
+            
+            if result["success"]:
+                # Update UI
+                self.file_label.setText(f"✓ CSV Import ({result['total_fixtures']} fixtures)")
+                self.file_label.setStyleSheet("padding: 10px; border: 1px solid #4CAF50; border-radius: 4px; background-color: #E8F5E8; color: #2E7D32; font-weight: bold;")
+                
+                # Update GDTF status
+                self._update_gdtf_status(result["matched_fixtures"], result["total_fixtures"])
+                
+                # Update UI state
+                self.update_ui_state()
+                self.mark_project_dirty()
+                
+                self.status_bar.showMessage(f"Loaded {result['total_fixtures']} fixtures from CSV import")
+                
+            else:
+                QMessageBox.critical(self, "Error", f"Failed to load CSV fixtures:\n{result['error']}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading CSV fixtures:\n{str(e)}")
     
     def load_mvr_file(self, file_path: str):
         """Load an MVR file using the controller."""
@@ -349,6 +436,11 @@ class MVRApp(QMainWindow):
     def match_gdtf_profiles(self):
         """Open GDTF matching dialog."""
         try:
+            # Check if we have fixtures loaded
+            if not self.controller.matched_fixtures:
+                QMessageBox.warning(self, "No Fixtures", "Please load fixtures first (MVR or CSV).")
+                return
+            
             dialog = GDTFMatchingDialog(self, self.controller, self.config)
             
             if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -375,6 +467,50 @@ class MVRApp(QMainWindow):
                     
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error in GDTF matching:\n{str(e)}")
+    
+    def load_external_gdtf_profiles(self):
+        """Load external GDTF profiles for CSV matching."""
+        try:
+            # Get the last used directory
+            last_dir = self.config.get_external_gdtf_folder() if self.config else ""
+            
+            folder_path = QFileDialog.getExistingDirectory(
+                self, 
+                "Select GDTF Profiles Folder", 
+                last_dir
+            )
+            
+            if not folder_path:
+                return
+            
+            # Load profiles
+            result = self.controller.load_external_gdtf_profiles(folder_path)
+            
+            if result["success"]:
+                profile_count = result["profiles_loaded"]
+                
+                # Save folder path
+                if self.config:
+                    self.config.set_external_gdtf_folder(folder_path)
+                
+                # Update UI state
+                self.update_ui_state()
+                self.mark_project_dirty()
+                
+                QMessageBox.information(
+                    self, 
+                    "External GDTF Profiles Loaded", 
+                    f"Successfully loaded {profile_count} GDTF profiles from:\n{folder_path}\n\n"
+                    f"Use 'Match GDTF Profiles' to match these profiles to your fixtures."
+                )
+                
+                self.status_bar.showMessage(f"Loaded {profile_count} external GDTF profiles")
+                
+            else:
+                QMessageBox.critical(self, "Error", f"Failed to load external GDTF profiles:\n{result['error']}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading external GDTF profiles:\n{str(e)}")
     
     def select_attributes(self):
         """Open attribute selection dialog."""
@@ -582,9 +718,13 @@ class MVRApp(QMainWindow):
         # Reset other UI elements
         self.file_label.setText("No file selected")
         self.file_label.setStyleSheet("padding: 10px; border: 1px solid #ccc; border-radius: 4px;")
-        self.gdtf_status_label.setText("Load an MVR file first")
+        self.gdtf_status_label.setText("Load a file first")
         self.gdtf_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
-        self.results_text.setPlainText("No analysis results yet.\n\nPlease:\n1. Load an MVR file\n2. Match GDTF profiles\n3. Select attributes per fixture type\n4. Run analysis")
+        self.results_text.setPlainText("No analysis results yet.\n\nPlease:\n1. Load a file (MVR or CSV)\n2. Match GDTF profiles\n3. Select attributes per fixture type\n4. Run analysis")
+        
+        # Reset import type to MVR
+        self.mvr_radio.setChecked(True)
+        self.update_browse_button()
         
         self.update_ui_state()
         self.update_window_title()
@@ -886,6 +1026,16 @@ class MVRApp(QMainWindow):
         """Update UI state based on current application state."""
         status = self.controller.get_current_status()
         
+        # Update GDTF buttons
+        file_loaded = status["file_loaded"]
+        has_fixtures = status["matched_fixtures"] > 0 or status["unmatched_fixtures"] > 0
+        
+        # External GDTF button - enabled when CSV fixtures loaded or for manual loading
+        self.load_external_gdtf_btn.setEnabled(file_loaded)
+        
+        # Manual matching button - enabled when fixtures loaded
+        self.match_gdtf_btn.setEnabled(has_fixtures)
+        
         # Update select attributes button
         can_select_attributes = (
             status["file_loaded"] and 
@@ -902,6 +1052,7 @@ class MVRApp(QMainWindow):
         
         self.analyze_btn.setEnabled(can_analyze)
         
+        # Update analysis status label
         if can_select_attributes:
             if can_analyze:
                 self.analysis_status_label.setText("Ready to analyze with selected attributes!")
