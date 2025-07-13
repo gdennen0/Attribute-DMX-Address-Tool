@@ -14,14 +14,15 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QTextEdit, QCheckBox,
     QGroupBox, QScrollArea, QComboBox, QProgressBar, QMessageBox,
     QFrame, QGridLayout, QDialog, QMenuBar, QMenu, QRadioButton,
-    QButtonGroup
+    QButtonGroup, QTableWidget, QTableWidgetItem, QHeaderView,
+    QTreeWidget, QTreeWidgetItem
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
-from PyQt6.QtGui import QFont, QAction
+from PyQt6.QtGui import QFont, QAction, QColor
 
 # Import our clean architecture
-from controllers import MVRController
 from config import Config
+from controllers.main_controller import MVRController
 from views.gdtf_matching_dialog import GDTFMatchingDialog
 from views.fixture_attribute_dialog import FixtureAttributeDialog
 from views.ma3_xml_dialog import MA3XMLDialog
@@ -88,24 +89,34 @@ class MVRApp(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # Main layout
-        main_layout = QHBoxLayout(central_widget)
+        # Main layout - Single vertical column
+        main_layout = QVBoxLayout(central_widget)
         
-        # Left panel (controls)
-        left_panel = self.create_left_panel()
-        main_layout.addWidget(left_panel, 1)
+        # Create horizontal layout for the first three steps
+        steps_horizontal_layout = QHBoxLayout()
         
-        # Right panel (results)
-        right_panel = self.create_right_panel()
-        main_layout.addWidget(right_panel, 2)
+        # Add first three control sections to horizontal layout with equal stretch
+        control_sections = self.create_control_sections()
+        for section in control_sections:
+            steps_horizontal_layout.addWidget(section, 1)  # Each section gets equal stretch (1/3 of space)
+        
+        # Add the horizontal layout to main layout
+        main_layout.addLayout(steps_horizontal_layout)
+        
+        # Add results section in the middle
+        results_section = self.create_results_section()
+        main_layout.addWidget(results_section, 1)  # Give it stretch priority
+        
+        # Add export section at the bottom
+        export_section = self.create_export_section()
+        main_layout.addWidget(export_section)
         
         # Status bar
         self.status_bar = self.statusBar()
         self.status_bar.showMessage("Ready")
         
-        # Set minimum sizes
-        left_panel.setMinimumWidth(350)
-        right_panel.setMinimumWidth(500)
+        # Set minimum window size
+        self.setMinimumWidth(800)
         
         # Initialize MA3 config button visibility based on current format
         current_format = self.format_combo.currentText()
@@ -180,11 +191,9 @@ class MVRApp(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
     
-    def create_left_panel(self) -> QWidget:
-        """Create the left control panel."""
-        panel = QFrame()
-        panel.setFrameStyle(QFrame.Shape.StyledPanel)
-        layout = QVBoxLayout(panel)
+    def create_control_sections(self) -> List[QWidget]:
+        """Create all control sections as separate group boxes."""
+        sections = []
         
         # File selection group
         file_group = QGroupBox("1. File Selection")
@@ -223,7 +232,7 @@ class MVRApp(QMainWindow):
         self.mvr_radio.toggled.connect(self.update_browse_button)
         self.csv_radio.toggled.connect(self.update_browse_button)
         
-        layout.addWidget(file_group)
+        sections.append(file_group)
         
         # GDTF Matching group
         gdtf_group = QGroupBox("2. GDTF Profile Matching")
@@ -234,13 +243,6 @@ class MVRApp(QMainWindow):
         self.gdtf_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
         gdtf_layout.addWidget(self.gdtf_status_label)
         
-        # External GDTF button (for CSV imports)
-        self.load_external_gdtf_btn = QPushButton("Load External GDTF Profiles")
-        self.load_external_gdtf_btn.clicked.connect(self.load_external_gdtf_profiles)
-        self.load_external_gdtf_btn.setEnabled(False)
-        self.load_external_gdtf_btn.setToolTip("Load GDTF profiles from a folder (required for CSV imports)")
-        gdtf_layout.addWidget(self.load_external_gdtf_btn)
-        
         # Manual matching button
         self.match_gdtf_btn = QPushButton("Match GDTF Profiles")
         self.match_gdtf_btn.clicked.connect(self.match_gdtf_profiles)
@@ -248,73 +250,26 @@ class MVRApp(QMainWindow):
         self.match_gdtf_btn.setToolTip("Match fixture types to GDTF profiles")
         gdtf_layout.addWidget(self.match_gdtf_btn)
         
-        layout.addWidget(gdtf_group)
+        sections.append(gdtf_group)
         
-        # Analysis group
-        analysis_group = QGroupBox("3. Analysis")
-        analysis_layout = QVBoxLayout(analysis_group)
+        # Attribute Selection group
+        attribute_group = QGroupBox("3. Attribute Selection")
+        attribute_layout = QVBoxLayout(attribute_group)
         
-        self.analysis_status_label = QLabel("Complete steps 1-2 first")
-        self.analysis_status_label.setWordWrap(True)
-        self.analysis_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
-        analysis_layout.addWidget(self.analysis_status_label)
-        
-        # Output format selection
-        format_layout = QHBoxLayout()
-        format_layout.addWidget(QLabel("Output Format:"))
-        self.format_combo = QComboBox()
-        self.format_combo.addItems(["text", "csv", "json", "ma3_xml"])
-        self.format_combo.setCurrentText(self.config.get_output_format())
-        self.format_combo.currentTextChanged.connect(self.on_format_changed)
-        format_layout.addWidget(self.format_combo)
-        
-        # MA3 XML configuration button (initially hidden)
-        self.ma3_config_btn = QPushButton("MA3 XML Settings")
-        self.ma3_config_btn.clicked.connect(self.configure_ma3_xml)
-        self.ma3_config_btn.setVisible(False)
-        format_layout.addWidget(self.ma3_config_btn)
-        
-        analysis_layout.addLayout(format_layout)
-        
-        # Buttons layout
-        buttons_layout = QHBoxLayout()
+        self.attribute_status_label = QLabel("Complete steps 1-2 first")
+        self.attribute_status_label.setWordWrap(True)
+        self.attribute_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+        attribute_layout.addWidget(self.attribute_status_label)
         
         # Select Attributes button
         self.select_attrs_btn = QPushButton("Select Attributes")
         self.select_attrs_btn.clicked.connect(self.select_attributes)
         self.select_attrs_btn.setEnabled(False)
-        buttons_layout.addWidget(self.select_attrs_btn)
+        attribute_layout.addWidget(self.select_attrs_btn)
         
-        # Analyze button
-        self.analyze_btn = QPushButton("Analyze")
-        self.analyze_btn.clicked.connect(self.analyze_fixtures)
-        self.analyze_btn.setEnabled(False)
-        buttons_layout.addWidget(self.analyze_btn)
+        sections.append(attribute_group)
         
-        analysis_layout.addLayout(buttons_layout)
-        
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        analysis_layout.addWidget(self.progress_bar)
-        
-        layout.addWidget(analysis_group)
-        
-        # Export group
-        export_group = QGroupBox("4. Export")
-        export_layout = QVBoxLayout(export_group)
-        
-        self.export_btn = QPushButton("Export Results")
-        self.export_btn.clicked.connect(self.export_results)
-        self.export_btn.setEnabled(False)
-        export_layout.addWidget(self.export_btn)
-        
-        layout.addWidget(export_group)
-        
-        # Stretch to push everything to the top
-        layout.addStretch()
-        
-        return panel
+        return sections
     
     def update_browse_button(self):
         """Update the browse button text based on selected import type."""
@@ -348,25 +303,293 @@ class MVRApp(QMainWindow):
             self.config.set_last_mvr_directory(str(Path(file_path).parent))
             self.load_mvr_file(file_path)
     
-    def create_right_panel(self) -> QWidget:
-        """Create the right results panel."""
-        panel = QFrame()
-        panel.setFrameStyle(QFrame.Shape.StyledPanel)
-        layout = QVBoxLayout(panel)
+    def create_results_section(self) -> QWidget:
+        """Create the results section with hierarchical tree view."""
+        # Results group
+        results_group = QGroupBox("Analysis Results")
+        layout = QVBoxLayout(results_group)
         
-        # Results title
-        title = QLabel("Analysis Results")
-        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        layout.addWidget(title)
+        # Results status label
+        self.results_status = QLabel("Complete steps 1-3 for automatic analysis")
+        self.results_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
+        layout.addWidget(self.results_status)
         
-        # Results text area
-        self.results_text = QTextEdit()
-        self.results_text.setReadOnly(True)
-        self.results_text.setFont(QFont("Courier", 10))
-        self.results_text.setPlainText("No analysis results yet.\n\nPlease:\n1. Load a file (MVR or CSV)\n2. Match GDTF profiles\n3. Select attributes per fixture type\n4. Run analysis")
-        layout.addWidget(self.results_text)
+        # Results tree widget
+        self.results_tree = QTreeWidget()
+        self.results_tree.setAlternatingRowColors(True)
+        self.results_tree.setRootIsDecorated(True)
+        self.results_tree.setIndentation(20)
         
-        return panel
+        # Set initial headers
+        self.results_tree.setHeaderLabels(["Name", "Type", "Value", "Universe", "Channel", "DMX"])
+        
+        # Set initial empty state
+        self._setup_empty_results_tree()
+        
+        layout.addWidget(self.results_tree)
+        
+        return results_group
+
+    def create_export_section(self) -> QWidget:
+        """Create the export section with format selection and export controls."""
+        # Export group
+        export_group = QGroupBox("4. Export")
+        export_layout = QHBoxLayout(export_group)
+        
+        # Output format selection
+        export_layout.addWidget(QLabel("Output Format:"))
+        self.format_combo = QComboBox()
+        self.format_combo.addItems(["text", "csv", "json", "ma3_xml"])
+        self.format_combo.setCurrentText(self.config.get_output_format())
+        self.format_combo.currentTextChanged.connect(self.on_format_changed)
+        export_layout.addWidget(self.format_combo)
+        
+        # MA3 XML configuration button (initially hidden)
+        self.ma3_config_btn = QPushButton("MA3 XML Settings")
+        self.ma3_config_btn.clicked.connect(self.configure_ma3_xml)
+        self.ma3_config_btn.setVisible(False)
+        export_layout.addWidget(self.ma3_config_btn)
+        
+        # Progress bar for automatic analysis
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        export_layout.addWidget(self.progress_bar)
+        
+        # Export button
+        self.export_btn = QPushButton("Export Results")
+        self.export_btn.clicked.connect(self.export_results)
+        self.export_btn.setEnabled(False)
+        export_layout.addWidget(self.export_btn)
+        
+        return export_group
+
+    def _setup_empty_results_tree(self):
+        """Set up the results tree in empty state."""
+        self.results_tree.clear()
+        
+        # Add a status item
+        status_item = QTreeWidgetItem()
+        status_item.setText(0, "Complete steps 1-3 for automatic analysis")
+        status_item.setForeground(0, QColor("gray"))
+        
+        # Set italic font
+        font = QFont()
+        font.setItalic(True)
+        status_item.setFont(0, font)
+        
+        self.results_tree.addTopLevelItem(status_item)
+        
+        # Resize to fit content
+        self.results_tree.resizeColumnToContents(0)
+
+    def _populate_results_tree(self, analysis_results: dict):
+        """Populate the results tree with hierarchical analysis data."""
+        if not analysis_results or not analysis_results.get("success"):
+            self._show_error_in_tree("Analysis failed")
+            return
+        
+        results = analysis_results.get("analysis_results")
+        if not results:
+            self._show_error_in_tree("No analysis results available")
+            return
+        
+        fixtures = results.fixtures
+        if not fixtures:
+            self._show_error_in_tree("No fixtures to display")
+            return
+        
+        # Clear the tree
+        self.results_tree.clear()
+        
+        # Sort fixtures by fixture_id
+        sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], key=lambda x: x.fixture_id)
+        
+        for fixture in sorted_fixtures:
+            # Create fixture parent item
+            fixture_type = fixture.gdtf_spec or "Unknown"
+            if fixture_type.endswith('.gdtf'):
+                fixture_type = fixture_type[:-5]
+            
+            # Get fixture type to determine which attributes to show
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            fixture_attributes = self.fixture_type_attributes.get(fixture_type_clean, [])
+            
+            # Create fixture item with summary info
+            fixture_item = QTreeWidgetItem()
+            fixture_item.setText(0, f"Fixture {fixture.fixture_id}: {fixture.name}")
+            fixture_item.setText(1, "FIXTURE")
+            fixture_item.setText(2, fixture_type)
+            fixture_item.setText(3, str(fixture.base_address))
+            fixture_item.setText(4, fixture.gdtf_mode or "")
+            
+            # Set fixture item styling
+            font = QFont()
+            font.setBold(True)
+            fixture_item.setFont(0, font)
+            fixture_item.setForeground(0, QColor("darkblue"))
+            
+            # Add attribute child items
+            if hasattr(fixture, 'absolute_addresses') and fixture.absolute_addresses:
+                for attr_name in fixture_attributes:
+                    if attr_name in fixture.absolute_addresses:
+                        addr_info = fixture.absolute_addresses[attr_name]
+                        universe = addr_info.get("universe", "?")
+                        channel = addr_info.get("channel", "?")
+                        absolute_address = addr_info.get("absolute_address", "?")
+                        
+                        # Create attribute child item
+                        attr_item = QTreeWidgetItem()
+                        attr_item.setText(0, attr_name)
+                        attr_item.setText(1, "ATTRIBUTE")
+                        attr_item.setText(2, f"{universe}.{channel}")
+                        attr_item.setText(3, str(universe))
+                        attr_item.setText(4, str(channel))
+                        attr_item.setText(5, str(absolute_address))
+                        
+                        # Set attribute item styling
+                        attr_item.setForeground(0, QColor("darkgreen"))
+                        
+                        fixture_item.addChild(attr_item)
+                    else:
+                        # Attribute selected but not available in GDTF
+                        attr_item = QTreeWidgetItem()
+                        attr_item.setText(0, attr_name)
+                        attr_item.setText(1, "ATTRIBUTE")
+                        attr_item.setText(2, "N/A - Not in GDTF")
+                        
+                        # Set N/A styling
+                        attr_item.setForeground(0, QColor("orange"))
+                        attr_item.setForeground(2, QColor("orange"))
+                        
+                        fixture_item.addChild(attr_item)
+            
+            # If no attributes, add a placeholder
+            if fixture_item.childCount() == 0:
+                no_attr_item = QTreeWidgetItem()
+                no_attr_item.setText(0, "No attributes selected")
+                no_attr_item.setForeground(0, QColor("gray"))
+                
+                font = QFont()
+                font.setItalic(True)
+                no_attr_item.setFont(0, font)
+                
+                fixture_item.addChild(no_attr_item)
+            
+            # Add fixture to tree
+            self.results_tree.addTopLevelItem(fixture_item)
+            
+            # Expand the fixture to show attributes
+            fixture_item.setExpanded(True)
+        
+        # Resize columns to fit content
+        for i in range(self.results_tree.columnCount()):
+            self.results_tree.resizeColumnToContents(i)
+
+    def _show_error_in_tree(self, error_message: str):
+        """Show an error message in the tree."""
+        self.results_tree.clear()
+        
+        error_item = QTreeWidgetItem()
+        error_item.setText(0, error_message)
+        error_item.setForeground(0, QColor("red"))
+        
+        # Set bold font
+        font = QFont()
+        font.setBold(True)
+        error_item.setFont(0, font)
+        
+        self.results_tree.addTopLevelItem(error_item)
+        
+        # Resize to fit content
+        self.results_tree.resizeColumnToContents(0)
+        
+    def _clear_results_tree(self):
+        """Clear the results tree and show empty state."""
+        self._setup_empty_results_tree()
+        self.results_status.setText("Complete steps 1-3 for automatic analysis")
+        self.results_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
+
+    def _should_trigger_analysis(self) -> bool:
+        """Check if automatic analysis should be triggered."""
+        # Check if we have everything needed for analysis
+        status = self.controller.get_current_status()
+        
+        # Step 1: File loaded
+        if not status["file_loaded"]:
+            return False
+            
+        # Step 2: GDTF matching (at least some fixtures matched)
+        if status["matched_fixtures"] <= 0:
+            return False
+            
+        # Step 3: Attributes selected
+        if not self.fixture_type_attributes:
+            return False
+            
+        # Check if any attributes are actually selected
+        total_attributes = sum(len(attrs) for attrs in self.fixture_type_attributes.values())
+        if total_attributes <= 0:
+            return False
+            
+        return True
+
+    def _trigger_automatic_analysis(self):
+        """Trigger automatic analysis if conditions are met."""
+        if not self._should_trigger_analysis():
+            self._clear_results_tree()
+            return
+            
+        # Prevent multiple concurrent analyses
+        if self.worker is not None:
+            return
+            
+        self.results_status.setText("Analyzing automatically...")
+        self.results_status.setStyleSheet("color: blue; font-weight: bold; padding: 10px;")
+        
+        # Get output format
+        output_format = self.format_combo.currentText()
+        
+        # Handle MA3 XML configuration
+        ma3_config = None
+        if output_format == "ma3_xml":
+            if self.ma3_config is None:
+                self.results_status.setText("Configure MA3 XML settings first")
+                self.results_status.setStyleSheet("color: orange; font-weight: bold; padding: 10px;")
+                return
+            ma3_config = self.ma3_config
+        
+        # Show progress
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        
+        # Start analysis in background thread
+        self.worker = AnalysisWorker(self.controller, self.fixture_type_attributes, output_format, ma3_config)
+        self.worker.progress_update.connect(self.update_progress)
+        self.worker.analysis_complete.connect(self.analysis_complete)
+        self.worker.analysis_error.connect(self.analysis_error)
+        self.worker.start()
+
+    def _update_results_status(self):
+        """Update the results status based on current state."""
+        if self._should_trigger_analysis():
+            if self.current_results:
+                summary = self.current_results.get("summary", {})
+                total_fixtures = summary.get("total_fixtures", 0)
+                matched_fixtures = summary.get("matched_fixtures", 0)
+                conflicts = len(summary.get("conflicts", []))
+                
+                status_msg = f"Analysis complete: {matched_fixtures}/{total_fixtures} fixtures"
+                if conflicts > 0:
+                    status_msg += f", {conflicts} conflicts"
+                
+                self.results_status.setText(status_msg)
+                self.results_status.setStyleSheet("color: green; font-weight: bold; padding: 10px;")
+            else:
+                self.results_status.setText("Ready for automatic analysis")
+                self.results_status.setStyleSheet("color: blue; font-weight: bold; padding: 10px;")
+        else:
+            self.results_status.setText("Complete steps 1-3 for automatic analysis")
+            self.results_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
     
     def browse_csv_file(self):
         """Open CSV import dialog."""
@@ -398,6 +621,9 @@ class MVRApp(QMainWindow):
                 self.update_ui_state()
                 self.mark_project_dirty()
                 
+                # Trigger automatic analysis
+                self._trigger_automatic_analysis()
+                
                 self.status_bar.showMessage(f"Loaded {result['total_fixtures']} fixtures from CSV import")
                 
             else:
@@ -424,6 +650,9 @@ class MVRApp(QMainWindow):
                 # Update UI state
                 self.update_ui_state()
                 self.mark_project_dirty()
+                
+                # Trigger automatic analysis
+                self._trigger_automatic_analysis()
                 
                 self.status_bar.showMessage(f"Loaded {result['total_fixtures']} fixtures from {Path(file_path).name}")
                 
@@ -461,6 +690,9 @@ class MVRApp(QMainWindow):
                     self.update_ui_state()
                     self.mark_project_dirty()
                     
+                    # Trigger automatic analysis
+                    self._trigger_automatic_analysis()
+                    
                     self.status_bar.showMessage(f"Updated fixture matches: {matched_count}/{total_count} matched")
                 else:
                     QMessageBox.critical(self, "Error", f"Failed to update matches:\n{result['error']}")
@@ -497,6 +729,9 @@ class MVRApp(QMainWindow):
                 self.update_ui_state()
                 self.mark_project_dirty()
                 
+                # Trigger automatic analysis since new GDTF profiles might affect matching
+                self._trigger_automatic_analysis()
+                
                 QMessageBox.information(
                     self, 
                     "External GDTF Profiles Loaded", 
@@ -513,7 +748,7 @@ class MVRApp(QMainWindow):
             QMessageBox.critical(self, "Error", f"Error loading external GDTF profiles:\n{str(e)}")
     
     def select_attributes(self):
-        """Open attribute selection dialog."""
+        """Open attribute selection dialog and save selections independently."""
         try:
             # Open the fixture attribute dialog with existing selections
             dialog = FixtureAttributeDialog(self, self.controller, self.config, self.fixture_type_attributes)
@@ -525,58 +760,25 @@ class MVRApp(QMainWindow):
                 # Validate that we have some attributes selected
                 total_selected = sum(len(attrs) for attrs in self.fixture_type_attributes.values())
                 if total_selected == 0:
-                    QMessageBox.warning(self, "No Attributes", "No attributes were selected for analysis.")
-                    self.analyze_btn.setEnabled(False)
-                    return
+                    QMessageBox.warning(self, "No Attributes", "No attributes were selected. You can modify your selection anytime.")
+                    self.fixture_type_attributes = {}
+                else:
+                    # Store the attributes in config (for future reference)
+                    self.config.set_fixture_type_attributes(self.fixture_type_attributes)
+                    
+                    # Mark project as dirty
+                    self.mark_project_dirty()
                 
-                # Store the attributes in config (for future reference)
-                self.config.set_fixture_type_attributes(self.fixture_type_attributes)
+                # Update UI state after any changes
+                self.update_ui_state()
                 
-                # Enable analyze button and mark project as dirty
-                self.analyze_btn.setEnabled(True)
-                self.mark_project_dirty()
-                
-                # Update status
-                self.status_bar.showMessage(f"Attributes selected for {len(self.fixture_type_attributes)} fixture types")
+                # Trigger automatic analysis
+                self._trigger_automatic_analysis()
                 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error in attribute selection:\n{str(e)}")
     
-    def analyze_fixtures(self):
-        """Start fixture analysis with per-fixture-type attributes."""
-        if not self.fixture_type_attributes:
-            QMessageBox.warning(self, "No Attributes", "Please select attributes first.")
-            return
-        
-        # Get output format
-        output_format = self.format_combo.currentText()
-        
-        # Handle MA3 XML configuration
-        ma3_config = None
-        if output_format == "ma3_xml":
-            # Use stored config if available, otherwise prompt for config
-            if self.ma3_config is None:
-                QMessageBox.information(
-                    self,
-                    "MA3 XML Configuration Required",
-                    "Please configure MA3 XML settings first using the 'MA3 XML Settings' button."
-                )
-                return
-            ma3_config = self.ma3_config
-        
-        # Note: Output format is already saved to config via on_format_changed
-        
-        # Disable controls during analysis
-        self.analyze_btn.setEnabled(False)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # Indeterminate progress
-        
-        # Start analysis in background thread
-        self.worker = AnalysisWorker(self.controller, self.fixture_type_attributes, output_format, ma3_config)
-        self.worker.progress_update.connect(self.update_progress)
-        self.worker.analysis_complete.connect(self.analysis_complete)
-        self.worker.analysis_error.connect(self.analysis_error)
-        self.worker.start()
+
     
     def update_progress(self, message: str):
         """Update progress message."""
@@ -586,16 +788,18 @@ class MVRApp(QMainWindow):
         """Handle successful analysis completion."""
         self.worker = None
         self.progress_bar.setVisible(False)
-        self.analyze_btn.setEnabled(True)
         
         # Store results
         self.current_results = result
         
         # Update UI
-        self.results_text.setPlainText(result["export_data"])
+        self._populate_results_tree(result)
         self.export_btn.setEnabled(True)
         
-        # Update UI state
+        # Update results status
+        self._update_results_status()
+        
+        # Update UI state (this will re-enable buttons appropriately)
         self.update_ui_state()
         
         # Show summary
@@ -614,7 +818,16 @@ class MVRApp(QMainWindow):
         """Handle analysis error."""
         self.worker = None
         self.progress_bar.setVisible(False)
-        self.analyze_btn.setEnabled(True)
+        
+        # Show error in tree
+        self._show_error_in_tree(f"Analysis failed: {error}")
+        
+        # Update results status
+        self.results_status.setText("Analysis failed")
+        self.results_status.setStyleSheet("color: red; font-weight: bold; padding: 10px;")
+        
+        # Update UI state (this will re-enable buttons appropriately)
+        self.update_ui_state()
         
         QMessageBox.critical(self, "Analysis Error", f"Analysis failed:\n{error}")
         self.status_bar.showMessage("Analysis failed")
@@ -634,6 +847,10 @@ class MVRApp(QMainWindow):
         if not self.format_combo.signalsBlocked():
             self.config.set_output_format(format_name)  # Save to config file
             self.mark_project_dirty()
+            
+            # Trigger re-analysis if format change affects analysis
+            if self.current_results:
+                self._trigger_automatic_analysis()
     
     def configure_ma3_xml(self):
         """Open MA3 XML configuration dialog."""
@@ -641,6 +858,10 @@ class MVRApp(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.ma3_config = dialog.get_config()
             self.mark_project_dirty()  # Mark project as dirty when MA3 config changes
+            
+            # Trigger re-analysis if MA3 config changes affect analysis
+            if self.current_results and self.format_combo.currentText() == "ma3_xml":
+                self._trigger_automatic_analysis()
             QMessageBox.information(
                 self,
                 "Configuration Saved",
@@ -720,7 +941,9 @@ class MVRApp(QMainWindow):
         self.file_label.setStyleSheet("padding: 10px; border: 1px solid #ccc; border-radius: 4px;")
         self.gdtf_status_label.setText("Load a file first")
         self.gdtf_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
-        self.results_text.setPlainText("No analysis results yet.\n\nPlease:\n1. Load a file (MVR or CSV)\n2. Match GDTF profiles\n3. Select attributes per fixture type\n4. Run analysis")
+        self.attribute_status_label.setText("Complete steps 1-2 first")
+        self.attribute_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+        self._clear_results_tree()
         
         # Reset import type to MVR
         self.mvr_radio.setChecked(True)
@@ -1030,9 +1253,6 @@ class MVRApp(QMainWindow):
         file_loaded = status["file_loaded"]
         has_fixtures = status["matched_fixtures"] > 0 or status["unmatched_fixtures"] > 0
         
-        # External GDTF button - enabled when CSV fixtures loaded or for manual loading
-        self.load_external_gdtf_btn.setEnabled(file_loaded)
-        
         # Manual matching button - enabled when fixtures loaded
         self.match_gdtf_btn.setEnabled(has_fixtures)
         
@@ -1044,25 +1264,25 @@ class MVRApp(QMainWindow):
         
         self.select_attrs_btn.setEnabled(can_select_attributes)
         
-        # Update analyze button
-        can_analyze = (
-            can_select_attributes and 
-            len(self.fixture_type_attributes) > 0
-        )
-        
-        self.analyze_btn.setEnabled(can_analyze)
-        
-        # Update analysis status label
+        # Update attribute selection status label
         if can_select_attributes:
-            if can_analyze:
-                self.analysis_status_label.setText("Ready to analyze with selected attributes!")
-                self.analysis_status_label.setStyleSheet("color: green; font-weight: bold; padding: 5px;")
+            if self.fixture_type_attributes:
+                total_attrs = sum(len(attrs) for attrs in self.fixture_type_attributes.values())
+                if total_attrs > 0:
+                    self.attribute_status_label.setText(f"Attributes saved ({total_attrs} total) - you can modify anytime")
+                    self.attribute_status_label.setStyleSheet("color: green; font-weight: bold; padding: 5px;")
+                else:
+                    self.attribute_status_label.setText("No attributes selected - click to modify")
+                    self.attribute_status_label.setStyleSheet("color: orange; font-weight: bold; padding: 5px;")
             else:
-                self.analysis_status_label.setText("Ready for attribute selection!")
-                self.analysis_status_label.setStyleSheet("color: blue; font-weight: bold; padding: 5px;")
+                self.attribute_status_label.setText("Ready for attribute selection!")
+                self.attribute_status_label.setStyleSheet("color: blue; font-weight: bold; padding: 5px;")
         else:
-            self.analysis_status_label.setText("Complete steps 1-2 first")
-            self.analysis_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+            self.attribute_status_label.setText("Complete steps 1-2 first")
+            self.attribute_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+        
+        # Update results status for automatic analysis
+        self._update_results_status()
         
         # Update save action
         self.save_action.setEnabled(self.project_dirty)
@@ -1078,34 +1298,6 @@ def main():
     app.setOrganizationName("AttributeAddresser")
     app.setOrganizationDomain("attributeaddresser.com")
     app.setApplicationVersion("1.0")
-    
-    # Additional macOS-specific settings for menu bar
-    if sys.platform == "darwin":  # macOS
-        # Try to set the process name for the menu bar
-        try:
-            from Foundation import NSBundle
-            bundle = NSBundle.mainBundle()
-            if bundle:
-                info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
-                if info:
-                    info['CFBundleName'] = 'AttributeAddresser'
-                    info['CFBundleDisplayName'] = 'AttributeAddresser'
-        except ImportError:
-            # Foundation framework not available, continue without it
-            pass
-        
-        # Alternative approach using PyObjC if available
-        try:
-            import objc
-            from Foundation import NSProcessInfo
-            process_info = NSProcessInfo.processInfo()
-            process_info.setProcessName_("AttributeAddresser")
-        except ImportError:
-            # PyObjC not available, continue without it
-            pass
-        
-        # Set the application menu title
-        app.setProperty("LSUIElement", False)
     
     # Create and show the main window
     window = MVRApp()

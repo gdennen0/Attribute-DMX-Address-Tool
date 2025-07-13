@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<GMA3 DataVersion="2.2.5.2">
+    <Sequence Name="FUCK" Guid="BC D0 74 04 9D 89 E4 55 4C 28 F5 12 CF 8F 56 3E" AutoStart="Yes" AutoStop="Yes" AutoFix="No" AutoStomp="No" SoftLTP="Yes" XFadeReload="No" SwapProtect="No" KillProtect="No" UseExecutorTime="Yes" OffwhenOverridden="Yes" SequMIB="Enabled" AutoPrePos="No" WrapAround="Yes" MasterGoMode="None" SpeedfromRate="No" Tracking="Yes" IncludeLinkLastGo="Yes" RateScale="One" SpeedScale="One" PreferCueAppearance="No" ExecutorDisplayMode="Both" Action="Pool Default">
+        <Cue Name="OffCue" Release="Yes" Assert="Assert" AllowDuplicates="" TrigType="">
+            <Part Guid="BC D0 74 04 6A D9 63 2A B6 35 C6 1C CB 8F 56 3E" AlignRangeX="No" AlignRangeY="No" AlignRangeZ="No" PreserveGridPositions="No" MAgic="No" Mode="0" Action="Pool Default" />
+        </Cue>
+        <Cue Name="CueZero" No="  0">
+            <Part Guid="BC D0 74 04 24 A4 7B 5D 20 43 97 26 32 90 56 3E" AlignRangeX="No" AlignRangeY="No" AlignRangeZ="No" PreserveGridPositions="No" MAgic="No" Mode="0" Action="Pool Default" />
+        </Cue>
+        <Cue No="  1" AllowDuplicates="">
+            <Part Guid="BC D0 74 04 EB 77 00 4B 8A 50 68 30 32 90 56 3E" AlignRangeX="No" AlignRangeY="No" AlignRangeZ="No" PreserveGridPositions="No" MAgic="No" Mode="0" Action="Pool Default" Sync="" Morph="">
+                <PresetData Size="1">
+                    <Phaser IDType="0" ID="101" Attribute="ColorRGB_R" GridPos="0" GridPosMatr="0" Selective="true">
+                        <Step Function="ColorRGB_R" Absolute="100" />
+                    </Phaser>
+                </PresetData>
+            </Part>
+        </Cue>
+    </Sequence>
+</GMA3>

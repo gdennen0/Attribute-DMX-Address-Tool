@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
-from controllers import MVRController
+from controllers.main_controller import MVRController
 
 
 class FixtureAttributeDialog(QDialog):
@@ -61,12 +61,14 @@ class FixtureAttributeDialog(QDialog):
         # Scrollable area for fixture type controls
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.fixture_widget = QWidget()
         self.fixture_layout = QVBoxLayout(self.fixture_widget)
+        self.fixture_layout.setSpacing(10)
         
         scroll.setWidget(self.fixture_widget)
-        layout.addWidget(scroll)
+        layout.addWidget(scroll, 1)  # Give scroll area stretch priority
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -83,7 +85,7 @@ class FixtureAttributeDialog(QDialog):
         button_layout.addStretch()
         
         # Dialog controls
-        ok_btn = QPushButton("Continue with Analysis")
+        ok_btn = QPushButton("Save Attribute Selection")
         ok_btn.setDefault(True)
         ok_btn.clicked.connect(self.accept)
         button_layout.addWidget(ok_btn)
@@ -119,6 +121,9 @@ class FixtureAttributeDialog(QDialog):
         for fixture_type, info in fixture_types_info.items():
             group_widget = self.create_fixture_type_control(fixture_type, info)
             self.fixture_layout.addWidget(group_widget)
+        
+        # Add stretch to prevent excessive vertical spacing when few fixture types
+        self.fixture_layout.addStretch()
     
     def _get_fixture_types_info(self) -> Dict[str, Dict]:
         """Get fixture type information from controller."""
@@ -168,8 +173,20 @@ class FixtureAttributeDialog(QDialog):
     def create_fixture_type_control(self, fixture_type: str, info: Dict) -> QWidget:
         """Create UI controls for a fixture type."""
         group = QGroupBox(f"Fixture Type: {fixture_type}")
-        group.setStyleSheet("QGroupBox { font-weight: bold; margin-top: 10px; }")
+        group.setStyleSheet("""
+            QGroupBox { 
+                font-weight: bold; 
+                margin-top: 10px; 
+                padding-top: 15px; 
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+            }
+        """)
         layout = QVBoxLayout(group)
+        layout.setContentsMargins(10, 20, 10, 10)  # Add proper margins to prevent overlap
         
         # Fixture info section
         info_layout = QHBoxLayout()
@@ -216,18 +233,21 @@ class FixtureAttributeDialog(QDialog):
             attr_scroll = QScrollArea()
             attr_scroll.setWidgetResizable(True)
             attr_scroll.setMaximumHeight(200)
+            attr_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             
             attr_widget = QWidget()
-            attr_layout = QGridLayout(attr_widget)
+            attr_layout = QVBoxLayout(attr_widget)
+            attr_layout.setSpacing(5)
             
             # Create checkboxes for attributes
             checkboxes = {}
-            for i, attr_name in enumerate(available_attributes):
+            for attr_name in available_attributes:
                 checkbox = QCheckBox(attr_name)
-                row = i // 3
-                col = i % 3
-                attr_layout.addWidget(checkbox, row, col)
+                attr_layout.addWidget(checkbox)
                 checkboxes[attr_name] = checkbox
+            
+            # Add stretch to prevent excessive vertical spacing
+            attr_layout.addStretch()
             
             attr_scroll.setWidget(attr_widget)
             layout.addWidget(attr_scroll)

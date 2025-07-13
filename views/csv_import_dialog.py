@@ -13,10 +13,147 @@ from PyQt6.QtWidgets import (
     QFileDialog, QMessageBox, QFrame, QTableWidget, QTableWidgetItem,
     QRadioButton, QButtonGroup, QSpinBox, QTextEdit, QSplitter
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont, QMouseEvent, QKeyEvent
 
 from services.csv_service import CSVService
+
+
+class SelectableTableWidget(QTableWidget):
+    """Custom table widget with proper multi-row selection support."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        
+        # Enable selection highlighting
+        self.setShowGrid(True)
+        self.setAlternatingRowColors(True)
+        
+        # Connect selection changes
+        self.selectionModel().selectionChanged.connect(self.on_selection_changed)
+        
+    def on_selection_changed(self):
+        """Handle selection change events."""
+        # Emit signal or update parent as needed
+        pass
+    
+    def get_selected_rows(self) -> List[int]:
+        """Get list of currently selected row indices."""
+        selected_rows = []
+        for index in self.selectionModel().selectedRows():
+            selected_rows.append(index.row())
+        return sorted(selected_rows)
+    
+    def is_row_selected(self, row: int) -> bool:
+        """Check if a row is selected."""
+        return row in self.get_selected_rows()
+    
+    def keyPressEvent(self, event):
+        """Handle keyboard events for shortcuts."""
+        if event.key() == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            # Ctrl+A - select all rows
+            self.selectAll()
+            event.accept()
+            return
+        
+        # Call parent implementation
+        super().keyPressEvent(event)
+    
+    def setup_table_data(self, headers: List[str], data_rows: List[List[str]]):
+        """Set up the table with proper data and selection support."""
+        if not headers or not data_rows:
+            return
+        
+        # Add one extra column for checkboxes
+        self.setRowCount(len(data_rows))
+        self.setColumnCount(len(headers) + 1)
+        
+        # Set headers with checkbox column first
+        table_headers = ['✓'] + headers
+        self.setHorizontalHeaderLabels(table_headers)
+        
+        # Populate table with checkbox column and data
+        for row_idx, row in enumerate(data_rows):
+            # Add checkbox in first column
+            checkbox_item = QTableWidgetItem()
+            checkbox_item.setFlags(
+                Qt.ItemFlag.ItemIsUserCheckable | 
+                Qt.ItemFlag.ItemIsEnabled |
+                Qt.ItemFlag.ItemIsSelectable
+            )
+            checkbox_item.setCheckState(Qt.CheckState.Checked)  # Default to checked
+            checkbox_item.setToolTip("Uncheck to exclude this row from import")
+            self.setItem(row_idx, 0, checkbox_item)
+            
+            # Add data in remaining columns
+            for col_idx, cell in enumerate(row):
+                if col_idx < len(headers):
+                    item = QTableWidgetItem(str(cell))
+                    item.setToolTip(str(cell))  # Show full content on hover
+                    # CRUCIAL: Make items selectable but read-only
+                    item.setFlags(
+                        Qt.ItemFlag.ItemIsEnabled |
+                        Qt.ItemFlag.ItemIsSelectable
+                    )
+                    self.setItem(row_idx, col_idx + 1, item)
+        
+        # Resize columns to content with reasonable limits
+        self.resizeColumnsToContents()
+        
+        # Set checkbox column to fixed width
+        self.setColumnWidth(0, 30)
+        
+        # Set maximum column width for data columns to prevent overly wide columns
+        for col in range(1, self.columnCount()):
+            current_width = self.columnWidth(col)
+            if current_width > 200:
+                self.setColumnWidth(col, 200)
+        
+        # Disable sorting for now (can be re-enabled if needed)
+        self.setSortingEnabled(False)
+    
+    def get_checked_rows(self) -> List[int]:
+        """Get list of row indices that have their checkbox checked."""
+        checked_rows = []
+        try:
+            for row_idx in range(self.rowCount()):
+                checkbox_item = self.item(row_idx, 0)
+                if checkbox_item and checkbox_item.checkState() == Qt.CheckState.Checked:
+                    checked_rows.append(row_idx)
+        except Exception as e:
+            print(f"ERROR in get_checked_rows: {e}")
+        
+        print(f"DEBUG: get_checked_rows() returning: {checked_rows}")
+        return checked_rows
+    
+    def set_row_checked(self, row: int, checked: bool):
+        """Set the checkbox state for a specific row."""
+        if 0 <= row < self.rowCount():
+            checkbox_item = self.item(row, 0)
+            if checkbox_item:
+                checkbox_item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+    
+    def check_selected_rows(self):
+        """Check all selected rows."""
+        for row_idx in self.get_selected_rows():
+            self.set_row_checked(row_idx, True)
+    
+    def uncheck_selected_rows(self):
+        """Uncheck all selected rows."""
+        for row_idx in self.get_selected_rows():
+            self.set_row_checked(row_idx, False)
+    
+    def check_all_rows(self):
+        """Check all rows."""
+        for row_idx in range(self.rowCount()):
+            self.set_row_checked(row_idx, True)
+    
+    def uncheck_all_rows(self):
+        """Uncheck all rows."""
+        for row_idx in range(self.rowCount()):
+            self.set_row_checked(row_idx, False)
 
 
 class CSVImportDialog(QDialog):
@@ -141,15 +278,19 @@ class CSVImportDialog(QDialog):
         panel.setFrameStyle(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(panel)
         
-        # Preview label
+        # Preview label with usage instructions
         self.preview_label = QLabel("CSV Preview")
         self.preview_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         layout.addWidget(self.preview_label)
         
-        # Preview table
-        self.preview_table = QTableWidget()
+        # Usage instructions
+        usage_label = QLabel("💡 Click to select rows • Shift+Click for range selection • Ctrl+Click to toggle • Ctrl+A to select all")
+        usage_label.setStyleSheet("color: #666; font-size: 11px; margin-bottom: 5px;")
+        layout.addWidget(usage_label)
+        
+        # Preview table - use custom table widget for shift-click selection
+        self.preview_table = SelectableTableWidget()
         self.preview_table.setAlternatingRowColors(True)
-        self.preview_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.preview_table.horizontalHeader().setStretchLastSection(False)
         layout.addWidget(self.preview_table)
         
@@ -224,51 +365,21 @@ class CSVImportDialog(QDialog):
         # Show all rows
         preview_rows = self.data_rows
         
-        # Add one extra column for checkboxes
-        self.preview_table.setRowCount(len(preview_rows))
-        self.preview_table.setColumnCount(len(self.headers) + 1)
-        
-        # Set headers with checkbox column first
-        headers = ['✓'] + self.headers
-        self.preview_table.setHorizontalHeaderLabels(headers)
-        
-        # Populate table with checkbox column and data
-        for row_idx, row in enumerate(preview_rows):
-            # Add checkbox in first column
-            checkbox_item = QTableWidgetItem()
-            checkbox_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            checkbox_item.setCheckState(Qt.CheckState.Checked)  # Default to checked
-            checkbox_item.setToolTip("Uncheck to exclude this row from import")
-            self.preview_table.setItem(row_idx, 0, checkbox_item)
-            
-            # Add data in remaining columns
-            for col_idx, cell in enumerate(row):
-                if col_idx < len(self.headers):
-                    item = QTableWidgetItem(str(cell))
-                    item.setToolTip(str(cell))  # Show full content on hover
-                    item.setFlags(Qt.ItemFlag.ItemIsEnabled)  # Make read-only
-                    self.preview_table.setItem(row_idx, col_idx + 1, item)
-        
-        # Resize columns to content with reasonable limits
-        self.preview_table.resizeColumnsToContents()
-        
-        # Set checkbox column to fixed width
-        self.preview_table.setColumnWidth(0, 30)
-        
-        # Set maximum column width for data columns to prevent overly wide columns
-        for col in range(1, self.preview_table.columnCount()):
-            current_width = self.preview_table.columnWidth(col)
-            if current_width > 200:
-                self.preview_table.setColumnWidth(col, 200)
-        
-        # Disable sorting for checkbox column, enable for others
-        self.preview_table.setSortingEnabled(False)  # We'll manage this manually
+        # Setup the table with data
+        self.preview_table.setup_table_data(self.headers, preview_rows)
         
         # Connect checkbox changes to update info
         self.preview_table.itemChanged.connect(self.update_preview_info)
+        self.preview_table.itemChanged.connect(self.update_import_button_state)
         
         # Update the preview info
         self.update_preview_info()
+        
+        # Initialize selection status
+        self.update_selection_status()
+        
+        # Update import button state
+        self.update_import_button_state()
     
     def update_preview_info(self):
         """Update the preview information display."""
@@ -279,23 +390,19 @@ class CSVImportDialog(QDialog):
         total_rows = len(self.data_rows)
         total_cols = len(self.headers)
         
-        # Count checked rows
-        checked_rows = 0
-        for row_idx in range(self.preview_table.rowCount()):
-            checkbox_item = self.preview_table.item(row_idx, 0)
-            if checkbox_item and checkbox_item.checkState() == Qt.CheckState.Checked:
-                checked_rows += 1
+        # Get checked rows
+        checked_rows = self.preview_table.get_checked_rows()
+        checked_count = len(checked_rows)
         
         # Check for empty cells in checked rows only
         empty_cells = 0
         non_empty_cells = 0
         
-        for row_idx, row in enumerate(self.data_rows):
-            # Only count if row is checked
-            checkbox_item = self.preview_table.item(row_idx, 0)
-            if checkbox_item and checkbox_item.checkState() == Qt.CheckState.Checked:
+        for row_idx in checked_rows:
+            if row_idx < len(self.data_rows):
+                row = self.data_rows[row_idx]
                 for cell in row:
-                    if not cell.strip():
+                    if not str(cell).strip():
                         empty_cells += 1
                     else:
                         non_empty_cells += 1
@@ -303,8 +410,8 @@ class CSVImportDialog(QDialog):
         # Update preview label text
         if hasattr(self, 'preview_label'):
             self.preview_label.setText(
-                f"CSV Preview - {checked_rows}/{total_rows} rows selected × {total_cols} columns "
-                f"({non_empty_cells} filled, {empty_cells} empty cells in selected rows)"
+                f"CSV Preview - {checked_count}/{total_rows} rows checked × {total_cols} columns "
+                f"({non_empty_cells} filled, {empty_cells} empty cells in checked rows)"
             )
         
         # Update info text
@@ -314,11 +421,10 @@ class CSVImportDialog(QDialog):
         """Get only the rows that are checked in the preview table."""
         selected_rows = []
         
-        for row_idx in range(self.preview_table.rowCount()):
-            checkbox_item = self.preview_table.item(row_idx, 0)
-            if checkbox_item and checkbox_item.checkState() == Qt.CheckState.Checked:
-                if row_idx < len(self.data_rows):
-                    selected_rows.append(self.data_rows[row_idx])
+        checked_rows = self.preview_table.get_checked_rows()
+        for row_idx in checked_rows:
+            if row_idx < len(self.data_rows):
+                selected_rows.append(self.data_rows[row_idx])
         
         return selected_rows
     
@@ -350,7 +456,7 @@ class CSVImportDialog(QDialog):
         }
         
         # Create mapping controls
-        self.mapping_combos = {}
+        self.mapping_widgets = {}
         
         # Headers
         self.mapping_grid.addWidget(QLabel("Field"), 0, 0)
@@ -375,7 +481,7 @@ class CSVImportDialog(QDialog):
                 combo.setCurrentIndex(suggested_mappings[field] + 1)
             
             combo.currentIndexChanged.connect(self.update_column_mapping)
-            self.mapping_combos[field] = combo
+            self.mapping_widgets[field] = {'combo': combo}
             self.mapping_grid.addWidget(combo, row, 1)
             
             required_label = QLabel("Yes")
@@ -399,7 +505,7 @@ class CSVImportDialog(QDialog):
                 combo.setCurrentIndex(suggested_mappings[field] + 1)
             
             combo.currentIndexChanged.connect(self.update_column_mapping)
-            self.mapping_combos[field] = combo
+            self.mapping_widgets[field] = {'combo': combo}
             self.mapping_grid.addWidget(combo, row, 1)
             
             optional_label = QLabel("No")
@@ -460,14 +566,17 @@ class CSVImportDialog(QDialog):
             widgets['radio'].toggled.connect(lambda checked, m=method: self.update_fixture_id_method(m, checked))
     
     def update_column_mapping(self):
-        """Update the column mapping when selections change."""
+        """Update the column mapping from combo box selections."""
         self.column_mapping = {}
         
-        for field, combo in self.mapping_combos.items():
-            index = combo.currentData()
-            if index >= 0:
-                self.column_mapping[field] = index
+        # Get mapping from combo boxes - maps field names to CSV column indices
+        for field_name, widgets in self.mapping_widgets.items():
+            combo = widgets['combo']
+            column_index = combo.currentData()
+            if column_index is not None and column_index >= 0:  # -1 means "-- Select Column --"
+                self.column_mapping[field_name] = column_index
         
+        # Update info text and import button state
         self.update_info_text()
         self.update_import_button_state()
     
@@ -475,83 +584,99 @@ class CSVImportDialog(QDialog):
         """Update the fixture ID generation method."""
         if checked:
             self.fixture_id_config['method'] = method
-            
-            # Update start number if custom_start method
-            if method == 'custom_start' and 'input' in self.id_widgets[method]:
-                self.fixture_id_config['start_number'] = self.id_widgets[method]['input'].value()
-        
-        self.update_info_text()
-        self.update_import_button_state()
+            # Update info text and import button state
+            self.update_info_text()
+            self.update_import_button_state()
     
     def update_info_text(self):
-        """Update the info text with current configuration."""
+        """Update the info text display based on current configuration."""
         if not self.headers or not self.data_rows:
+            self.info_text.setPlainText("Select a CSV file to see preview and mapping options.")
             return
         
-        # Get selected rows
-        selected_rows = self.get_selected_rows()
+        # Get checked rows
+        checked_rows = self.preview_table.get_checked_rows()
+        selected_rows = self.preview_table.get_selected_rows()
         
-        info_lines = []
-        info_lines.append(f"CSV File: {len(selected_rows)}/{len(self.data_rows)} rows selected, {len(self.headers)} columns")
-        info_lines.append("")
+        info_parts = []
+        
+        # Data overview
+        info_parts.append(f"📊 DATA OVERVIEW")
+        info_parts.append(f"• Total rows: {len(self.data_rows)}")
+        info_parts.append(f"• Checked rows: {len(checked_rows)}")
+        info_parts.append(f"• Selected rows: {len(selected_rows)}")
+        info_parts.append(f"• Total columns: {len(self.headers)}")
         
         # Column mapping status
-        info_lines.append("Column Mapping:")
+        mapped_columns = len(self.column_mapping)
+        info_parts.append(f"\n🔗 COLUMN MAPPING")
+        info_parts.append(f"• Mapped columns: {mapped_columns}/{len(self.headers)}")
+        
+        # Required fields check
         required_fields = ['name', 'universe', 'dmx_address', 'fixture_type']
-        mapped_required = sum(1 for field in required_fields if field in self.column_mapping)
-        info_lines.append(f"  Required fields mapped: {mapped_required}/{len(required_fields)}")
+        missing_fields = []
+        for field in required_fields:
+            if field not in self.column_mapping:
+                missing_fields.append(field)
         
-        optional_mapped = sum(1 for field, _ in self.column_mapping.items() if field not in required_fields)
-        info_lines.append(f"  Optional fields mapped: {optional_mapped}")
-        info_lines.append("")
-        
-        # Data validation preview (for selected rows only)
-        if mapped_required == len(required_fields) and selected_rows:
-            valid_rows = 0
-            invalid_rows = 0
-            
-            for row in selected_rows:
-                if self.csv_service._is_valid_fixture_row(row, self.column_mapping):
-                    valid_rows += 1
-                else:
-                    invalid_rows += 1
-            
-            info_lines.append(f"Data Validation (Selected Rows):")
-            info_lines.append(f"  Valid fixture rows: {valid_rows}")
-            if invalid_rows > 0:
-                info_lines.append(f"  Invalid/blank rows: {invalid_rows} (will be skipped)")
-            info_lines.append("")
+        if missing_fields:
+            info_parts.append(f"• Missing required mappings: {', '.join(missing_fields)}")
+        else:
+            info_parts.append("• All required fields mapped ✓")
         
         # Fixture ID generation
-        method = self.fixture_id_config.get('method', 'sequential')
-        method_name = next((opt['name'] for opt in self.csv_service.get_fixture_id_generation_options() if opt['method'] == method), method)
-        info_lines.append(f"Fixture ID Generation: {method_name}")
+        info_parts.append(f"\n🔢 FIXTURE ID GENERATION")
+        info_parts.append(f"• Method: {self.fixture_id_config.get('method', 'sequential')}")
         
-        if method == 'custom_start':
-            start_num = self.fixture_id_config.get('start_number', 1)
-            info_lines.append(f"  Starting from: {start_num}")
-        
-        info_lines.append("")
-        
-        # Ready status
-        if not selected_rows:
-            info_lines.append("⚠ No rows selected for import")
-        elif mapped_required == len(required_fields):
-            info_lines.append("✓ Ready to import")
+        # Import readiness
+        info_parts.append(f"\n📥 IMPORT STATUS")
+        can_import = len(checked_rows) > 0 and len(missing_fields) == 0
+        if can_import:
+            info_parts.append("• Ready to import ✓")
         else:
-            missing = [field for field in required_fields if field not in self.column_mapping]
-            info_lines.append(f"⚠ Missing required fields: {', '.join(missing)}")
+            reasons = []
+            if len(checked_rows) == 0:
+                reasons.append("no rows checked")
+            if len(missing_fields) > 0:
+                reasons.append("missing required mappings")
+            info_parts.append(f"• Cannot import: {', '.join(reasons)}")
         
-        self.info_text.setPlainText('\n'.join(info_lines))
+        # Selection instructions
+        info_parts.append(f"\n💡 SELECTION HELP")
+        info_parts.append("• Click to select rows")
+        info_parts.append("• Shift+Click for range selection")
+        info_parts.append("• Ctrl+Click to toggle selection")
+        info_parts.append("• Ctrl+A to select all")
+        info_parts.append("• Use buttons to check/uncheck selected rows")
+        
+        self.info_text.setPlainText('\n'.join(info_parts))
     
     def update_import_button_state(self):
         """Update the import button enabled state based on current configuration."""
-        required_fields = ['name', 'universe', 'dmx_address', 'fixture_type']
+        # Check if we have required column mappings
+        required_fields = ['name', 'universe', 'dmx_address', 'fixture_type']  # Match actual requirements
         all_required_mapped = all(field in self.column_mapping for field in required_fields)
-        has_data = bool(self.headers and self.data_rows)
-        has_selected_rows = bool(self.get_selected_rows()) if has_data else False
         
-        self.import_btn.setEnabled(all_required_mapped and has_data and has_selected_rows)
+        # Check if we have data
+        has_data = bool(self.headers and self.data_rows)
+        
+        # Check if we have checked rows (not selected rows)
+        has_checked_rows = bool(self.preview_table.get_checked_rows()) if has_data else False
+        
+        # Debug logging to understand the state
+        print(f"DEBUG: Import button state check:")
+        print(f"  - Column mapping: {self.column_mapping}")
+        print(f"  - Required fields: {required_fields}")
+        print(f"  - All required mapped: {all_required_mapped}")
+        print(f"  - Has data: {has_data}")
+        print(f"  - Has checked rows: {has_checked_rows}")
+        if has_data:
+            print(f"  - Checked rows: {self.preview_table.get_checked_rows()}")
+        
+        # Enable import button only if all conditions are met
+        button_enabled = all_required_mapped and has_data and has_checked_rows
+        print(f"  - Button enabled: {button_enabled}")
+        self.import_btn.setEnabled(button_enabled)
     
     def import_csv(self):
         """Import the CSV data with current configuration."""
@@ -574,7 +699,7 @@ class CSVImportDialog(QDialog):
             selected_data_rows = self.get_selected_rows()
             
             # Create a temporary controller to use the unified approach
-            from controllers import MVRController
+            from controllers.main_controller import MVRController
             temp_controller = MVRController()
             
             # Use the unified loading method
@@ -638,34 +763,118 @@ class CSVImportDialog(QDialog):
         return self.last_csv_directory 
 
     def add_row_selection_controls(self):
-        """Add controls to select/deselect all rows."""
+        """Add controls to select/deselect all rows and batch operations."""
         # Add to the right panel, above the preview table
         controls_layout = QHBoxLayout()
         
+        # Row selection controls
         select_all_btn = QPushButton("Select All")
         select_all_btn.clicked.connect(self.select_all_rows)
+        select_all_btn.setToolTip("Select all rows (Ctrl+A)")
         controls_layout.addWidget(select_all_btn)
         
         deselect_all_btn = QPushButton("Deselect All")
         deselect_all_btn.clicked.connect(self.deselect_all_rows)
+        deselect_all_btn.setToolTip("Deselect all rows")
         controls_layout.addWidget(deselect_all_btn)
         
+        # Separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.VLine)
+        separator.setFrameShadow(QFrame.Shadow.Sunken)
+        controls_layout.addWidget(separator)
+        
+        # Batch operations for selected rows
+        batch_check_btn = QPushButton("✓ Check Selected")
+        batch_check_btn.clicked.connect(self.check_selected_rows)
+        batch_check_btn.setToolTip("Check all selected rows for import")
+        controls_layout.addWidget(batch_check_btn)
+        
+        batch_uncheck_btn = QPushButton("✗ Uncheck Selected")
+        batch_uncheck_btn.clicked.connect(self.uncheck_selected_rows)
+        batch_uncheck_btn.setToolTip("Uncheck all selected rows to exclude from import")
+        controls_layout.addWidget(batch_uncheck_btn)
+        
+        # Separator
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.Shape.VLine)
+        separator2.setFrameShadow(QFrame.Shadow.Sunken)
+        controls_layout.addWidget(separator2)
+        
+        # Check/Uncheck all rows operations
+        check_all_btn = QPushButton("✓ Check All")
+        check_all_btn.clicked.connect(self.check_all_rows)
+        check_all_btn.setToolTip("Check all rows for import")
+        controls_layout.addWidget(check_all_btn)
+        
+        uncheck_all_btn = QPushButton("✗ Uncheck All")
+        uncheck_all_btn.clicked.connect(self.uncheck_all_rows)
+        uncheck_all_btn.setToolTip("Uncheck all rows to exclude from import")
+        controls_layout.addWidget(uncheck_all_btn)
+        
         controls_layout.addStretch()
+        
+        # Add selection status label
+        self.selection_status_label = QLabel("No rows selected")
+        self.selection_status_label.setStyleSheet("color: #666; font-style: italic;")
+        controls_layout.addWidget(self.selection_status_label)
         
         # Insert before preview table
         right_panel_layout = self.preview_table.parent().layout()
         right_panel_layout.insertLayout(1, controls_layout)
+        
+        # Connect selection change to update status
+        self.preview_table.selectionModel().selectionChanged.connect(self.update_selection_status)
     
     def select_all_rows(self):
         """Select all rows in the preview table."""
-        for row_idx in range(self.preview_table.rowCount()):
-            checkbox_item = self.preview_table.item(row_idx, 0)
-            if checkbox_item:
-                checkbox_item.setCheckState(Qt.CheckState.Checked)
+        self.preview_table.selectAll()
+        self.update_selection_status()
     
     def deselect_all_rows(self):
         """Deselect all rows in the preview table."""
-        for row_idx in range(self.preview_table.rowCount()):
-            checkbox_item = self.preview_table.item(row_idx, 0)
-            if checkbox_item:
-                checkbox_item.setCheckState(Qt.CheckState.Unchecked) 
+        self.preview_table.clearSelection()
+        self.update_selection_status()
+    
+    def check_selected_rows(self):
+        """Check all selected rows for import."""
+        self.preview_table.check_selected_rows()
+        self.update_selection_status()
+        self.update_preview_info()
+        self.update_import_button_state()
+    
+    def uncheck_selected_rows(self):
+        """Uncheck all selected rows to exclude from import."""
+        self.preview_table.uncheck_selected_rows()
+        self.update_selection_status()
+        self.update_preview_info()
+        self.update_import_button_state()
+    
+    def check_all_rows(self):
+        """Check all rows for import."""
+        self.preview_table.check_all_rows()
+        self.update_selection_status()
+        self.update_preview_info()
+        self.update_import_button_state()
+    
+    def uncheck_all_rows(self):
+        """Uncheck all rows to exclude from import."""
+        self.preview_table.uncheck_all_rows()
+        self.update_selection_status()
+        self.update_preview_info()
+        self.update_import_button_state()
+    
+    def update_selection_status(self):
+        """Update the selection status label."""
+        if hasattr(self, 'selection_status_label'):
+            selected_rows = self.preview_table.get_selected_rows()
+            total_rows = self.preview_table.rowCount()
+            
+            if not selected_rows:
+                self.selection_status_label.setText("No rows selected")
+            elif len(selected_rows) == 1:
+                self.selection_status_label.setText(f"Row {selected_rows[0] + 1} selected")
+            elif len(selected_rows) == total_rows:
+                self.selection_status_label.setText(f"All {total_rows} rows selected")
+            else:
+                self.selection_status_label.setText(f"{len(selected_rows)} of {total_rows} rows selected") 

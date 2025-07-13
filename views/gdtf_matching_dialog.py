@@ -15,7 +15,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor
 
-from controllers import MVRController
+from controllers.main_controller import MVRController
+
 
 
 class GDTFMatchingDialog(QDialog):
