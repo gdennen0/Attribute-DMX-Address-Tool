@@ -30,6 +30,7 @@ class GDTFMatchingDialog(QDialog):
         self.controller = controller
         self.config = config
         self.fixture_type_controls = {}
+        self.fixture_data_source = "current"  # Can be "current", "master", or "remote"
         self.setup_ui()
         self.load_unmatched_fixtures()
         
@@ -118,8 +119,14 @@ class GDTFMatchingDialog(QDialog):
             if widget:
                 widget.setParent(None)
         
-        # Get current status
-        status = self.controller.get_current_status()
+        # Get current status based on the fixture data source
+        if self.fixture_data_source == "master":
+            status = self.controller.get_master_status()
+        elif self.fixture_data_source == "remote":
+            status = self.controller.get_remote_status()
+        else:
+            status = self.controller.get_current_status()
+        
         if not status["file_loaded"]:
             return
         
@@ -149,10 +156,31 @@ class GDTFMatchingDialog(QDialog):
         """Get fixture type information from controller."""
         return self.controller.get_unmatched_fixture_types()
     
+    def set_fixture_data_source(self, source: str):
+        """Set the fixture data source for the dialog."""
+        self.fixture_data_source = source
+        self._update_window_title()
+        self.load_unmatched_fixtures()  # Reload fixtures with new source
+    
+    def _update_window_title(self):
+        """Update window title based on fixture data source."""
+        if self.fixture_data_source == "master":
+            self.setWindowTitle("Master GDTF Profile Matching & Editing")
+        elif self.fixture_data_source == "remote":
+            self.setWindowTitle("Remote GDTF Profile Matching & Editing")
+        else:
+            self.setWindowTitle("GDTF Profile Matching & Editing")
+    
     def _get_all_fixture_type_info(self) -> Dict[str, Dict]:
         """Get all fixture type information from controller (both matched and unmatched)."""
-        # Get all fixtures from controller
-        all_fixtures = self.controller.matched_fixtures
+        # Get all fixtures from controller based on the selected source
+        if self.fixture_data_source == "master":
+            all_fixtures = self.controller.master_matched_fixtures
+        elif self.fixture_data_source == "remote":
+            all_fixtures = self.controller.remote_matched_fixtures
+        else:
+            # Default to current fixtures
+            all_fixtures = self.controller.matched_fixtures
         
         if not all_fixtures:
             return {}

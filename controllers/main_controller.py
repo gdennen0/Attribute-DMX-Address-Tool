@@ -25,11 +25,31 @@ class MVRController:
         self.gdtf_service = GDTFService()
         self.csv_service = CSVService()
         self.fixture_service = FixtureProcessingService()
+        
+        # Original single-dataset storage (for backward compatibility)
         self.loaded_fixtures = []
         self.matched_fixtures = []
         self.current_file_path = None
         self.current_import_type = None  # 'mvr' or 'csv'
         self.analysis_results = None
+        
+        # Master and Remote datasets
+        self.master_fixtures = []
+        self.master_matched_fixtures = []
+        self.master_file_path = None
+        self.master_import_type = None
+        
+        self.remote_fixtures = []
+        self.remote_matched_fixtures = []
+        self.remote_file_path = None
+        self.remote_import_type = None
+        
+        # Alignment results
+        self.alignment_results = None
+        
+        # Manual alignment tracking
+        self.manual_alignments = {}  # Dict mapping master_fixture_id -> remote_fixture_id
+        self.alignment_mode = "automatic"  # "automatic" or "manual"
     
     def load_fixtures_unified(self, source_type: str, **kwargs) -> Dict[str, Any]:
         """
@@ -79,6 +99,7 @@ class MVRController:
         
         return {
             "success": True,
+            "fixtures": self.matched_fixtures,  # Add the fixtures to the result
             "total_fixtures": summary["total_fixtures"],
             "matched_fixtures": summary["matched"],
             "unmatched_fixtures": summary["gdtf_missing"] + summary["mode_missing"],
@@ -502,3 +523,717 @@ class MVRController:
                 seen_types.add(fixture_type_clean)
         
         return matches 
+    
+    def get_current_master_fixture_type_matches(self) -> Dict[str, Dict[str, str]]:
+        """Get current master fixture type matches (profile and mode per fixture type)."""
+        matches = {}
+        
+        # Get one fixture per type that is matched
+        seen_types = set()
+        for fixture in self.master_matched_fixtures:
+            fixture_type = fixture.gdtf_spec or "Unknown"
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            
+            if fixture_type_clean not in seen_types and fixture.is_matched() and fixture.gdtf_profile:
+                matches[fixture_type_clean] = {
+                    'profile': fixture.gdtf_profile.name,
+                    'mode': fixture.gdtf_mode
+                }
+                seen_types.add(fixture_type_clean)
+        
+        return matches
+    
+    def get_current_remote_fixture_type_matches(self) -> Dict[str, Dict[str, str]]:
+        """Get current remote fixture type matches (profile and mode per fixture type)."""
+        matches = {}
+        
+        # Get one fixture per type that is matched
+        seen_types = set()
+        for fixture in self.remote_matched_fixtures:
+            fixture_type = fixture.gdtf_spec or "Unknown"
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            
+            if fixture_type_clean not in seen_types and fixture.is_matched() and fixture.gdtf_profile:
+                matches[fixture_type_clean] = {
+                    'profile': fixture.gdtf_profile.name,
+                    'mode': fixture.gdtf_mode
+                }
+                seen_types.add(fixture_type_clean)
+        
+        return matches
+    
+    # Master and Remote fixture management methods
+    
+    def load_master_mvr_file(self, file_path: str) -> Dict[str, Any]:
+        """Load master fixtures from MVR file."""
+        try:
+            result = self._load_mvr_fixtures(file_path)
+            if result["success"]:
+                self.master_fixtures = result["fixtures"]
+                self.master_matched_fixtures = result["fixtures"]
+                self.master_file_path = file_path
+                self.master_import_type = 'mvr'
+                
+                # Update the result to indicate master
+                result["dataset_type"] = "master"
+                
+            return result
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def load_master_csv_fixtures(self, fixture_matches: List[FixtureMatch]) -> Dict[str, Any]:
+        """Load master fixtures from CSV data."""
+        try:
+            # Store the fixtures
+            self.master_fixtures = fixture_matches
+            self.master_matched_fixtures = fixture_matches
+            self.master_file_path = None
+            self.master_import_type = 'csv'
+            
+            summary = self._get_matching_summary(fixture_matches)
+            
+            return {
+                "success": True,
+                "fixtures": fixture_matches,
+                "dataset_type": "master",
+                **summary
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def load_remote_mvr_file(self, file_path: str) -> Dict[str, Any]:
+        """Load remote fixtures from MVR file."""
+        try:
+            result = self._load_mvr_fixtures(file_path)
+            if result["success"]:
+                self.remote_fixtures = result["fixtures"]
+                self.remote_matched_fixtures = result["fixtures"]
+                self.remote_file_path = file_path
+                self.remote_import_type = 'mvr'
+                
+                # Update the result to indicate remote
+                result["dataset_type"] = "remote"
+                
+            return result
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def load_remote_csv_fixtures(self, fixture_matches: List[FixtureMatch]) -> Dict[str, Any]:
+        """Load remote fixtures from CSV data."""
+        try:
+            # Store the fixtures
+            self.remote_fixtures = fixture_matches
+            self.remote_matched_fixtures = fixture_matches
+            self.remote_file_path = None
+            self.remote_import_type = 'csv'
+            
+            summary = self._get_matching_summary(fixture_matches)
+            
+            return {
+                "success": True,
+                "fixtures": fixture_matches,
+                "dataset_type": "remote",
+                **summary
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def get_master_status(self) -> Dict[str, Any]:
+        """Get current master dataset status."""
+        total_fixtures = len(self.master_matched_fixtures)
+        matched_count = sum(1 for f in self.master_matched_fixtures if f.match_status == "matched")
+        
+        return {
+            "file_loaded": self.master_file_path is not None or self.master_import_type is not None,
+            "current_file": self.master_file_path,
+            "import_type": self.master_import_type,
+            "total_fixtures": total_fixtures,
+            "matched_fixtures": matched_count,
+            "unmatched_fixtures": total_fixtures - matched_count,
+        }
+    
+    def get_remote_status(self) -> Dict[str, Any]:
+        """Get current remote dataset status."""
+        total_fixtures = len(self.remote_matched_fixtures)
+        matched_count = sum(1 for f in self.remote_matched_fixtures if f.match_status == "matched")
+        
+        return {
+            "file_loaded": self.remote_file_path is not None or self.remote_import_type is not None,
+            "current_file": self.remote_file_path,
+            "import_type": self.remote_import_type,
+            "total_fixtures": total_fixtures,
+            "matched_fixtures": matched_count,
+            "unmatched_fixtures": total_fixtures - matched_count,
+        }
+    
+    def align_fixtures(self, alignment_config: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Align remote fixtures with master fixtures based on names and other criteria.
+        
+        Args:
+            alignment_config: Configuration for alignment algorithm
+            
+        Returns:
+            Dict containing alignment results
+        """
+        try:
+            if not self.master_matched_fixtures:
+                return {"success": False, "error": "No master fixtures loaded"}
+            
+            if not self.remote_matched_fixtures:
+                return {"success": False, "error": "No remote fixtures loaded"}
+            
+            # Default configuration
+            config = alignment_config or {
+                "match_threshold": 0.8,  # Minimum similarity score for a match
+                "case_sensitive": False,
+                "allow_partial_matches": True,
+                "prioritize_exact_matches": True
+            }
+            
+            alignment_results = []
+            remote_matched = set()  # Track which remote fixtures have been matched
+            
+            for master_fixture in self.master_matched_fixtures:
+                best_match = None
+                best_score = 0.0
+                best_remote_fixture = None
+                
+                for i, remote_fixture in enumerate(self.remote_matched_fixtures):
+                    if i in remote_matched:
+                        continue  # Skip already matched remote fixtures
+                    
+                    # Calculate similarity score
+                    score = self._calculate_fixture_similarity(
+                        master_fixture, remote_fixture, config
+                    )
+                    
+                    if score > best_score and score >= config["match_threshold"]:
+                        best_score = score
+                        best_remote_fixture = remote_fixture
+                        best_match = i
+                
+                # Create alignment result
+                alignment_result = {
+                    "master_fixture": master_fixture,
+                    "remote_fixture": best_remote_fixture,
+                    "alignment_status": "matched" if best_remote_fixture else "unmatched",
+                    "confidence": best_score,
+                    "notes": self._generate_alignment_notes(master_fixture, best_remote_fixture, best_score, config)
+                }
+                
+                alignment_results.append(alignment_result)
+                
+                # Mark remote fixture as matched
+                if best_match is not None:
+                    remote_matched.add(best_match)
+            
+            # Add unmatched remote fixtures
+            for i, remote_fixture in enumerate(self.remote_matched_fixtures):
+                if i not in remote_matched:
+                    alignment_result = {
+                        "master_fixture": None,
+                        "remote_fixture": remote_fixture,
+                        "alignment_status": "unmatched_remote",
+                        "confidence": 0.0,
+                        "notes": "No matching master fixture found"
+                    }
+                    alignment_results.append(alignment_result)
+            
+            # Store results
+            self.alignment_results = alignment_results
+            
+            # Calculate summary statistics
+            total_alignments = len(alignment_results)
+            matched_count = sum(1 for result in alignment_results if result["alignment_status"] == "matched")
+            unmatched_master = sum(1 for result in alignment_results if result["alignment_status"] == "unmatched")
+            unmatched_remote = sum(1 for result in alignment_results if result["alignment_status"] == "unmatched_remote")
+            
+            return {
+                "success": True,
+                "alignment_results": alignment_results,
+                "total_alignments": total_alignments,
+                "matched_count": matched_count,
+                "unmatched_master_count": unmatched_master,
+                "unmatched_remote_count": unmatched_remote,
+                "alignment_percentage": (matched_count / len(self.master_matched_fixtures)) * 100 if self.master_matched_fixtures else 0
+            }
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
+    
+    def _calculate_fixture_similarity(self, master_fixture, remote_fixture, config: Dict) -> float:
+        """
+        Calculate similarity score between master and remote fixtures.
+        
+        Returns:
+            Float between 0.0 and 1.0 indicating similarity
+        """
+        if not master_fixture or not remote_fixture:
+            return 0.0
+        
+        scores = []
+        weights = []
+        
+        # Name similarity (highest weight)
+        name_score = self._calculate_string_similarity(
+            master_fixture.name, remote_fixture.name, config["case_sensitive"]
+        )
+        scores.append(name_score)
+        weights.append(0.6)  # 60% weight on name
+        
+        # Fixture type similarity
+        master_type = getattr(master_fixture, 'gdtf_spec', '') or ''
+        remote_type = getattr(remote_fixture, 'gdtf_spec', '') or ''
+        type_score = self._calculate_string_similarity(
+            master_type, remote_type, config["case_sensitive"]
+        )
+        scores.append(type_score)
+        weights.append(0.3)  # 30% weight on type
+        
+        # DMX mode similarity (if available)
+        master_mode = getattr(master_fixture, 'gdtf_mode', '') or ''
+        remote_mode = getattr(remote_fixture, 'gdtf_mode', '') or ''
+        mode_score = self._calculate_string_similarity(
+            master_mode, remote_mode, config["case_sensitive"]
+        )
+        scores.append(mode_score)
+        weights.append(0.1)  # 10% weight on mode
+        
+        # Calculate weighted average
+        total_score = sum(score * weight for score, weight in zip(scores, weights))
+        
+        return total_score
+    
+    def _calculate_string_similarity(self, str1: str, str2: str, case_sensitive: bool = False) -> float:
+        """
+        Calculate similarity between two strings using multiple methods.
+        
+        Returns:
+            Float between 0.0 and 1.0
+        """
+        if not str1 and not str2:
+            return 1.0  # Both empty
+        if not str1 or not str2:
+            return 0.0  # One empty
+        
+        # Normalize strings
+        if not case_sensitive:
+            str1 = str1.lower()
+            str2 = str2.lower()
+        
+        # Exact match
+        if str1 == str2:
+            return 1.0
+        
+        # Levenshtein distance based similarity
+        distance = self._levenshtein_distance(str1, str2)
+        max_len = max(len(str1), len(str2))
+        similarity = 1.0 - (distance / max_len)
+        
+        # Bonus for substring matches
+        if str1 in str2 or str2 in str1:
+            substring_bonus = 0.2
+            similarity = min(1.0, similarity + substring_bonus)
+        
+        return similarity
+    
+    def _levenshtein_distance(self, str1: str, str2: str) -> int:
+        """Calculate Levenshtein distance between two strings."""
+        if len(str1) < len(str2):
+            return self._levenshtein_distance(str2, str1)
+        
+        if len(str2) == 0:
+            return len(str1)
+        
+        previous_row = list(range(len(str2) + 1))
+        for i, c1 in enumerate(str1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(str2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+        
+        return previous_row[-1]
+    
+    def _generate_alignment_notes(self, master_fixture, remote_fixture, score: float, config: Dict) -> str:
+        """Generate human-readable notes about the alignment."""
+        if not remote_fixture:
+            return "No matching remote fixture found"
+        
+        notes = []
+        
+        if score >= 0.95:
+            notes.append("Excellent match")
+        elif score >= 0.8:
+            notes.append("Good match")
+        elif score >= config["match_threshold"]:
+            notes.append("Acceptable match")
+        
+        # Add specific matching details
+        name_similarity = self._calculate_string_similarity(
+            master_fixture.name, remote_fixture.name, config["case_sensitive"]
+        )
+        
+        if name_similarity >= 0.9:
+            notes.append("names very similar")
+        elif name_similarity >= 0.7:
+            notes.append("names somewhat similar")
+        else:
+            notes.append("names different")
+        
+        # Check for exact name match
+        master_name = master_fixture.name if not config["case_sensitive"] else master_fixture.name.lower()
+        remote_name = remote_fixture.name if not config["case_sensitive"] else remote_fixture.name.lower()
+        
+        if master_name == remote_name:
+            notes.append("exact name match")
+        
+        return "; ".join(notes).capitalize()
+    
+    def get_alignment_results(self) -> Dict[str, Any]:
+        """Get current alignment results."""
+        if not self.alignment_results:
+            return {"success": False, "error": "No alignment performed yet"}
+        
+        return {
+            "success": True,
+            "alignment_results": self.alignment_results,
+            "total_alignments": len(self.alignment_results),
+            "matched_count": sum(1 for result in self.alignment_results if result["alignment_status"] == "matched"),
+        }
+    
+    def clear_alignment_results(self):
+        """Clear current alignment results."""
+        self.alignment_results = None
+        self.manual_alignments = {}
+        self.alignment_mode = "automatic"
+    
+    def set_manual_alignment(self, master_fixture_id: str, remote_fixture_id: str):
+        """Set a manual alignment between master and remote fixtures."""
+        if remote_fixture_id:
+            self.manual_alignments[master_fixture_id] = remote_fixture_id
+        else:
+            # Remove alignment if remote_fixture_id is None
+            if master_fixture_id in self.manual_alignments:
+                del self.manual_alignments[master_fixture_id]
+        
+        self.alignment_mode = "manual"
+    
+    def remove_manual_alignment(self, master_fixture_id: str):
+        """Remove a manual alignment for a master fixture."""
+        if master_fixture_id in self.manual_alignments:
+            del self.manual_alignments[master_fixture_id]
+    
+    def get_manual_alignments(self) -> Dict[str, str]:
+        """Get current manual alignments."""
+        return self.manual_alignments.copy()
+    
+    def get_alignment_mode(self) -> str:
+        """Get current alignment mode."""
+        return self.alignment_mode
+    
+    def generate_alignment_results_from_manual(self) -> Dict[str, Any]:
+        """Generate alignment results from manual alignments."""
+        try:
+            if not self.master_matched_fixtures or not self.remote_matched_fixtures:
+                return {"success": False, "error": "Missing master or remote fixtures"}
+            
+            # Create lookup dictionaries for fixtures
+            master_fixtures_by_id = {f.fixture_id: f for f in self.master_matched_fixtures}
+            remote_fixtures_by_id = {f.fixture_id: f for f in self.remote_matched_fixtures}
+            
+            alignment_results = []
+            matched_remote_ids = set()
+            
+            # Process master fixtures
+            for master_fixture in self.master_matched_fixtures:
+                master_id = master_fixture.fixture_id
+                remote_fixture = None
+                alignment_status = "unmatched"
+                confidence = 0.0
+                notes = "No manual alignment set"
+                
+                if master_id in self.manual_alignments:
+                    remote_id = self.manual_alignments[master_id]
+                    if remote_id in remote_fixtures_by_id:
+                        remote_fixture = remote_fixtures_by_id[remote_id]
+                        alignment_status = "matched"
+                        confidence = 1.0
+                        notes = "Manual alignment"
+                        matched_remote_ids.add(remote_id)
+                    else:
+                        notes = "Manual alignment target not found"
+                
+                alignment_result = {
+                    "master_fixture": master_fixture,
+                    "remote_fixture": remote_fixture,
+                    "alignment_status": alignment_status,
+                    "confidence": confidence,
+                    "notes": notes
+                }
+                alignment_results.append(alignment_result)
+            
+            # Add unmatched remote fixtures
+            for remote_fixture in self.remote_matched_fixtures:
+                if remote_fixture.fixture_id not in matched_remote_ids:
+                    alignment_result = {
+                        "master_fixture": None,
+                        "remote_fixture": remote_fixture,
+                        "alignment_status": "unmatched_remote",
+                        "confidence": 0.0,
+                        "notes": "No manual alignment set"
+                    }
+                    alignment_results.append(alignment_result)
+            
+            # Store results
+            self.alignment_results = alignment_results
+            
+            # Calculate summary statistics
+            total_alignments = len(alignment_results)
+            matched_count = sum(1 for result in alignment_results if result["alignment_status"] == "matched")
+            unmatched_master = sum(1 for result in alignment_results if result["alignment_status"] == "unmatched")
+            unmatched_remote = sum(1 for result in alignment_results if result["alignment_status"] == "unmatched_remote")
+            
+            return {
+                "success": True,
+                "alignment_results": alignment_results,
+                "total_alignments": total_alignments,
+                "matched_count": matched_count,
+                "unmatched_master_count": unmatched_master,
+                "unmatched_remote_count": unmatched_remote,
+                "alignment_percentage": (matched_count / len(self.master_matched_fixtures)) * 100 if self.master_matched_fixtures else 0
+            }
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
+    
+    def analyze_master_fixtures(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None) -> Dict[str, Any]:
+        """
+        Analyze master fixtures with selected attributes.
+        
+        Args:
+            fixture_type_attributes: Dict mapping fixture types to their selected attributes
+            output_format: Output format ('text', 'csv', 'json', 'ma3_xml')
+            ma3_config: Configuration for MA3 XML export
+            
+        Returns:
+            Dict containing analysis results
+        """
+        try:
+            if not self.master_matched_fixtures:
+                return {"success": False, "error": "No master fixtures loaded"}
+            
+            # Use the existing analysis method but with master fixtures
+            original_fixtures = self.matched_fixtures
+            self.matched_fixtures = self.master_matched_fixtures
+            
+            result = self.analyze_fixtures_by_type(fixture_type_attributes, output_format, ma3_config)
+            
+            # Restore original fixtures
+            self.matched_fixtures = original_fixtures
+            
+            if result["success"]:
+                result["dataset_type"] = "master"
+            
+            return result
+            
+        except Exception as e:
+            # Restore original fixtures in case of error
+            if 'original_fixtures' in locals():
+                self.matched_fixtures = original_fixtures
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
+    
+    def analyze_remote_fixtures(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None) -> Dict[str, Any]:
+        """
+        Analyze remote fixtures with selected attributes.
+        
+        Args:
+            fixture_type_attributes: Dict mapping fixture types to their selected attributes
+            output_format: Output format ('text', 'csv', 'json', 'ma3_xml')
+            ma3_config: Configuration for MA3 XML export
+            
+        Returns:
+            Dict containing analysis results
+        """
+        try:
+            if not self.remote_matched_fixtures:
+                return {"success": False, "error": "No remote fixtures loaded"}
+            
+            # Use the existing analysis method but with remote fixtures
+            original_fixtures = self.matched_fixtures
+            self.matched_fixtures = self.remote_matched_fixtures
+            
+            result = self.analyze_fixtures_by_type(fixture_type_attributes, output_format, ma3_config)
+            
+            # Restore original fixtures
+            self.matched_fixtures = original_fixtures
+            
+            if result["success"]:
+                result["dataset_type"] = "remote"
+            
+            return result
+            
+        except Exception as e:
+            # Restore original fixtures in case of error
+            if 'original_fixtures' in locals():
+                self.matched_fixtures = original_fixtures
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
+    
+    def update_master_fixture_matches(self, fixture_type_matches: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
+        """Update master fixture type matches (profile and mode per fixture type)."""
+        try:
+            if not self.master_matched_fixtures:
+                return {"success": False, "error": "No master fixtures loaded"}
+            
+            # Use the existing update method but with master fixtures
+            original_fixtures = self.matched_fixtures
+            self.matched_fixtures = self.master_matched_fixtures
+            
+            result = self.update_fixture_matches(fixture_type_matches)
+            
+            # Update master fixtures
+            self.master_matched_fixtures = self.matched_fixtures
+            
+            # Restore original fixtures
+            self.matched_fixtures = original_fixtures
+            
+            if result["success"]:
+                result["dataset_type"] = "master"
+            
+            return result
+            
+        except Exception as e:
+            # Restore original fixtures in case of error
+            if 'original_fixtures' in locals():
+                self.matched_fixtures = original_fixtures
+            return {"success": False, "error": str(e)}
+    
+    def update_remote_fixture_matches(self, fixture_type_matches: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
+        """Update remote fixture type matches (profile and mode per fixture type)."""
+        try:
+            if not self.remote_matched_fixtures:
+                return {"success": False, "error": "No remote fixtures loaded"}
+            
+            # Use the existing update method but with remote fixtures
+            original_fixtures = self.matched_fixtures
+            self.matched_fixtures = self.remote_matched_fixtures
+            
+            result = self.update_fixture_matches(fixture_type_matches)
+            
+            # Update remote fixtures
+            self.remote_matched_fixtures = self.matched_fixtures
+            
+            # Restore original fixtures
+            self.matched_fixtures = original_fixtures
+            
+            if result["success"]:
+                result["dataset_type"] = "remote"
+            
+            return result
+            
+        except Exception as e:
+            # Restore original fixtures in case of error
+            if 'original_fixtures' in locals():
+                self.matched_fixtures = original_fixtures
+            return {"success": False, "error": str(e)}
+    
+    def get_master_fixture_info(self) -> Dict[str, Dict]:
+        """Get master fixture types information for GDTF matching dialog."""
+        if not self.master_matched_fixtures:
+            return {}
+        
+        # Use the existing method but with master fixtures
+        original_fixtures = self.matched_fixtures
+        self.matched_fixtures = self.master_matched_fixtures
+        
+        # Get all fixture types (both matched and unmatched)
+        fixture_types = {}
+        for fixture in self.master_matched_fixtures:
+            fixture_type = fixture.gdtf_spec or "Unknown"
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            
+            if fixture_type_clean not in fixture_types:
+                fixture_types[fixture_type_clean] = {
+                    'count': 0,
+                    'matched_count': 0,
+                    'sample_names': [],
+                    'fixtures': [],
+                    'current_match': None
+                }
+            
+            fixture_types[fixture_type_clean]['count'] += 1
+            fixture_types[fixture_type_clean]['fixtures'].append(fixture)
+            
+            if fixture.is_matched():
+                fixture_types[fixture_type_clean]['matched_count'] += 1
+                if not fixture_types[fixture_type_clean]['current_match'] and fixture.gdtf_profile:
+                    fixture_types[fixture_type_clean]['current_match'] = {
+                        'profile': fixture.gdtf_profile.name,
+                        'mode': fixture.gdtf_mode
+                    }
+            
+            # Add sample names (up to 5)
+            if len(fixture_types[fixture_type_clean]['sample_names']) < 5:
+                fixture_types[fixture_type_clean]['sample_names'].append(fixture.name)
+        
+        # Restore original fixtures
+        self.matched_fixtures = original_fixtures
+        
+        return fixture_types
+    
+    def get_remote_fixture_info(self) -> Dict[str, Dict]:
+        """Get remote fixture types information for GDTF matching dialog."""
+        if not self.remote_matched_fixtures:
+            return {}
+        
+        # Use the existing method but with remote fixtures
+        original_fixtures = self.matched_fixtures
+        self.matched_fixtures = self.remote_matched_fixtures
+        
+        # Get all fixture types (both matched and unmatched)
+        fixture_types = {}
+        for fixture in self.remote_matched_fixtures:
+            fixture_type = fixture.gdtf_spec or "Unknown"
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            
+            if fixture_type_clean not in fixture_types:
+                fixture_types[fixture_type_clean] = {
+                    'count': 0,
+                    'matched_count': 0,
+                    'sample_names': [],
+                    'fixtures': [],
+                    'current_match': None
+                }
+            
+            fixture_types[fixture_type_clean]['count'] += 1
+            fixture_types[fixture_type_clean]['fixtures'].append(fixture)
+            
+            if fixture.is_matched():
+                fixture_types[fixture_type_clean]['matched_count'] += 1
+                if not fixture_types[fixture_type_clean]['current_match'] and fixture.gdtf_profile:
+                    fixture_types[fixture_type_clean]['current_match'] = {
+                        'profile': fixture.gdtf_profile.name,
+                        'mode': fixture.gdtf_mode
+                    }
+            
+            # Add sample names (up to 5)
+            if len(fixture_types[fixture_type_clean]['sample_names']) < 5:
+                fixture_types[fixture_type_clean]['sample_names'].append(fixture.name)
+        
+        # Restore original fixtures
+        self.matched_fixtures = original_fixtures
+        
+        return fixture_types

@@ -7,12 +7,10 @@ Run this file directly to start the GUI application.
 
 import sys
 import os
-from pathlib import Path
+from gui import main as gui_main
 
 # Add the current directory to Python path so we can import our modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from gui import main as gui_main
 
 
 def main():

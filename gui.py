@@ -15,10 +15,12 @@ from PyQt6.QtWidgets import (
     QGroupBox, QScrollArea, QComboBox, QProgressBar, QMessageBox,
     QFrame, QGridLayout, QDialog, QMenuBar, QMenu, QRadioButton,
     QButtonGroup, QTableWidget, QTableWidgetItem, QHeaderView,
-    QTreeWidget, QTreeWidgetItem
+    QTreeWidget, QTreeWidgetItem, QTabWidget, QTableView, QAbstractItemView,
+    QStyledItemDelegate, QStyle, QStyleOptionViewItem, QProxyStyle,
+    QSplitter
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
-from PyQt6.QtGui import QFont, QAction, QColor
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings, QMimeData, QAbstractItemModel, QModelIndex
+from PyQt6.QtGui import QFont, QAction, QColor, QDrag, QPixmap, QStandardItemModel, QStandardItem
 
 # Import our clean architecture
 from config import Config
@@ -27,6 +29,460 @@ from views.gdtf_matching_dialog import GDTFMatchingDialog
 from views.fixture_attribute_dialog import FixtureAttributeDialog
 from views.ma3_xml_dialog import MA3XMLDialog
 from views.csv_import_dialog import CSVImportDialog
+from views.mvr_import_dialog import MVRImportDialog
+
+
+class DragDropIndicator(QWidget):
+    """Visual indicator for drag and drop operations."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(2)
+        self.setStyleSheet("background-color: #0078d4; border-radius: 1px;")
+        self.hide()
+
+class DragDropItemModel(QStandardItemModel):
+    """Custom model that handles drag and drop properly."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setColumnCount(6)  # ID, Name, Type, Mode, Address, Routing
+        self.setHorizontalHeaderLabels([
+            "Fixture ID", "Name", "Type", "Mode", "Base Address", "Routing"
+        ])
+    
+    def supportedDropActions(self):
+        return Qt.DropAction.MoveAction
+    
+    def flags(self, index):
+        default_flags = super().flags(index)
+        if index.isValid():
+            # Make routing column (column 5) read-only but still draggable
+            if index.column() == 5:
+                return default_flags & ~Qt.ItemFlag.ItemIsEditable
+            return default_flags | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
+        return default_flags | Qt.ItemFlag.ItemIsDropEnabled
+    
+    def dropMimeData(self, data, action, row, column, parent):
+        """Handle drop operations - always drop entire rows."""
+        if action == Qt.DropAction.IgnoreAction:
+            return True
+        
+        # Always insert rows, never replace cells
+        return super().dropMimeData(data, action, row, 0, parent)
+    
+    def mimeTypes(self):
+        return ["application/x-qabstractitemmodeldatalist"]
+
+class DraggableTableView(QTableView):
+    """Custom QTableView with enhanced drag and drop functionality."""
+    
+    rowMoved = pyqtSignal(int, int)  # from_row, to_row
+    rowInserted = pyqtSignal(int)    # row_index
+    rowDeleted = pyqtSignal(int)     # row_index
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setup_drag_drop()
+        self.setup_context_menu()
+        
+        # Visual feedback for drag operations
+        self.drag_indicator = DragDropIndicator(self)
+        self.drag_start_row = -1
+        
+    def setup_drag_drop(self):
+        """Configure drag and drop settings."""
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDragDropOverwriteMode(False)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        
+    def setup_context_menu(self):
+        """Setup context menu for row operations."""
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_context_menu)
+    
+    def startDrag(self, supportedActions):
+        """Start drag operation with visual feedback."""
+        selected_indexes = self.selectedIndexes()
+        if not selected_indexes:
+            return
+            
+        # Get the first selected row
+        self.drag_start_row = selected_indexes[0].row()
+        
+        # Create drag object
+        drag = QDrag(self)
+        
+        # Create mime data
+        mime_data = self.model().mimeData(selected_indexes)
+        drag.setMimeData(mime_data)
+        
+        # Create visual representation
+        pixmap = self.create_drag_pixmap()
+        drag.setPixmap(pixmap)
+        
+        # Execute drag
+        result = drag.exec(Qt.DropAction.MoveAction)
+        
+        # Clean up
+        self.drag_start_row = -1
+        self.drag_indicator.hide()
+    
+    def create_drag_pixmap(self):
+        """Create a visual representation of the dragged row."""
+        if self.drag_start_row < 0:
+            return QPixmap()
+        
+        from PyQt6.QtGui import QPainter, QColor
+        
+        try:
+            # Get the visual rect of the first column to determine row height
+            first_index = self.model().index(self.drag_start_row, 0)
+            first_rect = self.visualRect(first_index)
+            
+            # Create a simple pixmap representing the dragged row
+            pixmap = QPixmap(self.width(), first_rect.height())
+            pixmap.fill(QColor(100, 100, 100, 180))  # Semi-transparent gray
+            
+            # Create a painter for styling
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            
+            # Draw a border to make it look like a dragged item
+            painter.setPen(QColor(50, 50, 50))
+            painter.drawRect(pixmap.rect().adjusted(0, 0, -1, -1))
+            
+            painter.end()
+            
+            # Set device pixel ratio for high-resolution screens
+            pixmap.setDevicePixelRatio(self.devicePixelRatio())
+            
+            return pixmap
+            
+        except Exception as e:
+            # Fallback: return a simple pixmap if rendering fails
+            pixmap = QPixmap(100, 30)
+            pixmap.fill(QColor(100, 100, 100, 180))
+            return pixmap
+    
+    def dragEnterEvent(self, event):
+        """Handle drag enter events."""
+        if event.source() == self:
+            event.acceptProposedAction()
+            self.drag_indicator.show()
+        else:
+            event.ignore()
+    
+    def dragMoveEvent(self, event):
+        """Handle drag move events with visual feedback."""
+        if event.source() != self:
+            event.ignore()
+            return
+            
+        # Calculate drop position
+        pos = event.position().toPoint()
+        index = self.indexAt(pos)
+        
+        if index.isValid():
+            row = index.row()
+            rect = self.visualRect(index)
+            
+            # Determine if we're in the top or bottom half
+            if pos.y() < rect.center().y():
+                # Insert above this row
+                insert_row = row
+            else:
+                # Insert below this row
+                insert_row = row + 1
+        else:
+            # Drop at the end
+            insert_row = self.model().rowCount()
+        
+        # Position the drop indicator
+        self.position_drop_indicator(insert_row)
+        
+        event.acceptProposedAction()
+    
+    def dragLeaveEvent(self, event):
+        """Handle drag leave events."""
+        self.drag_indicator.hide()
+        event.accept()
+    
+    def dropEvent(self, event):
+        """Handle drop events."""
+        if event.source() != self:
+            event.ignore()
+            return
+            
+        # Hide the indicator
+        self.drag_indicator.hide()
+        
+        # Get drop position
+        pos = event.position().toPoint()
+        target_index = self.indexAt(pos)
+        
+        if target_index.isValid():
+            target_row = target_index.row()
+            rect = self.visualRect(target_index)
+            
+            # Determine insertion point
+            if pos.y() >= rect.center().y():
+                target_row += 1
+        else:
+            target_row = self.model().rowCount()
+        
+        # Don't drop on the same position
+        if target_row == self.drag_start_row or target_row == self.drag_start_row + 1:
+            event.ignore()
+            return
+            
+        # Perform the actual drop
+        if self.perform_row_move(self.drag_start_row, target_row):
+            event.acceptProposedAction()
+            self.rowMoved.emit(self.drag_start_row, target_row)
+        else:
+            event.ignore()
+    
+    def position_drop_indicator(self, row):
+        """Position the visual drop indicator."""
+        if row >= self.model().rowCount():
+            # Position at the end
+            if self.model().rowCount() > 0:
+                last_index = self.model().index(self.model().rowCount() - 1, 0)
+                last_rect = self.visualRect(last_index)
+                y = last_rect.bottom()
+            else:
+                y = 0
+        else:
+            # Position above the target row
+            index = self.model().index(row, 0)
+            rect = self.visualRect(index)
+            y = rect.top()
+        
+        # Set indicator position
+        self.drag_indicator.setGeometry(0, y, self.width(), 2)
+        self.drag_indicator.show()
+    
+    def perform_row_move(self, from_row, to_row):
+        """Perform the actual row move operation."""
+        if from_row == to_row:
+            return False
+            
+        model = self.model()
+        
+        # Take the entire row
+        source_items = []
+        for col in range(model.columnCount()):
+            item = model.takeItem(from_row, col)
+            source_items.append(item)
+        
+        # Remove the source row
+        model.removeRow(from_row)
+        
+        # Adjust target position if needed
+        if to_row > from_row:
+            to_row -= 1
+        
+        # Insert new row at target position
+        model.insertRow(to_row)
+        
+        # Place items in the new row
+        for col, item in enumerate(source_items):
+            if item is not None:
+                # Special handling for routing column (column 5)
+                if col == 5:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                model.setItem(to_row, col, item)
+            else:
+                # Create empty item if none existed
+                new_item = QStandardItem("")
+                if col == 5:  # Routing column
+                    new_item.setFlags(new_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                model.setItem(to_row, col, new_item)
+        
+        # Select the moved row
+        self.selectRow(to_row)
+        
+        return True
+    
+    def show_context_menu(self, position):
+        """Show context menu with row operations."""
+        if not self.indexAt(position).isValid():
+            return
+        
+        menu = QMenu(self)
+        
+        # Add row operations
+        insert_above_action = menu.addAction("Insert Empty Row Above")
+        insert_below_action = menu.addAction("Insert Empty Row Below")
+        menu.addSeparator()
+        delete_row_action = menu.addAction("Delete Row")
+        
+        # Connect actions
+        insert_above_action.triggered.connect(self.insert_empty_row_above)
+        insert_below_action.triggered.connect(self.insert_empty_row_below)
+        delete_row_action.triggered.connect(self.delete_current_row)
+        
+        # Show menu
+        menu.exec(self.mapToGlobal(position))
+    
+    def insert_empty_row_above(self):
+        """Insert an empty row above the current selection."""
+        current_row = self.currentIndex().row()
+        if current_row >= 0:
+            self.insert_empty_row_at(current_row)
+            self.selectRow(current_row)
+    
+    def insert_empty_row_below(self):
+        """Insert an empty row below the current selection."""
+        current_row = self.currentIndex().row()
+        if current_row >= 0:
+            insert_row = current_row + 1
+            self.insert_empty_row_at(insert_row)
+            self.selectRow(insert_row)
+    
+    def insert_empty_row_at(self, row):
+        """Insert an empty row at the specified position."""
+        model = self.model()
+        model.insertRow(row)
+        
+        # Initialize the row with empty items
+        for col in range(model.columnCount()):
+            item = QStandardItem("")
+            if col == 5:  # Routing column
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            model.setItem(row, col, item)
+        
+        self.rowInserted.emit(row)
+    
+    def delete_current_row(self):
+        """Delete the currently selected row."""
+        current_row = self.currentIndex().row()
+        if current_row >= 0:
+            self.model().removeRow(current_row)
+            self.rowDeleted.emit(current_row)
+    
+    def resizeEvent(self, event):
+        """Handle resize events."""
+        super().resizeEvent(event)
+        # Update indicator width if it's visible
+        if self.drag_indicator.isVisible():
+            self.drag_indicator.setGeometry(
+                self.drag_indicator.x(),
+                self.drag_indicator.y(),
+                self.width(),
+                self.drag_indicator.height()
+            )
+
+# Keep the old DraggableTableWidget class name for backward compatibility
+# but make it use the new implementation
+class DraggableTableWidget(DraggableTableView):
+    """Backward compatible alias for DraggableTableView."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        # Create and set the model
+        self.item_model = DragDropItemModel(self)
+        self.setModel(self.item_model)
+        
+        # Configure view
+        self.horizontalHeader().setStretchLastSection(True)
+        self.verticalHeader().setVisible(False)
+        self.setAlternatingRowColors(True)
+        
+        # Connect signals to match the old interface
+        self.rowMoved.connect(self.on_row_moved)
+        self.rowInserted.connect(self.on_row_inserted)
+        self.rowDeleted.connect(self.on_row_deleted)
+        
+        # Create backward compatibility signal
+        self.itemSelectionChanged = self.selectionModel().selectionChanged
+    
+    def on_row_moved(self, from_row, to_row):
+        """Handle row moved events."""
+        if hasattr(self.parent(), 'on_row_moved'):
+            self.parent().on_row_moved(from_row, to_row)
+    
+    def on_row_inserted(self, row):
+        """Handle row inserted events."""
+        if hasattr(self.parent(), 'on_row_inserted'):
+            self.parent().on_row_inserted(row)
+    
+    def on_row_deleted(self, row):
+        """Handle row deleted events."""
+        if hasattr(self.parent(), 'on_row_deleted'):
+            self.parent().on_row_deleted(row)
+    
+    # Legacy methods for backward compatibility
+    def setRowCount(self, count):
+        """Set the number of rows."""
+        current_count = self.item_model.rowCount()
+        if count > current_count:
+            for _ in range(count - current_count):
+                self.item_model.insertRow(current_count)
+        elif count < current_count:
+            for _ in range(current_count - count):
+                self.item_model.removeRow(count)
+    
+    def rowCount(self):
+        """Get the number of rows."""
+        return self.item_model.rowCount()
+    
+    def columnCount(self):
+        """Get the number of columns."""
+        return self.item_model.columnCount()
+    
+    def setItem(self, row, column, item):
+        """Set an item at the specified position."""
+        if isinstance(item, QTableWidgetItem):
+            # Convert QTableWidgetItem to QStandardItem
+            std_item = QStandardItem(item.text())
+            std_item.setData(item.data(Qt.ItemDataRole.UserRole), Qt.ItemDataRole.UserRole)
+            if column == 5:  # Routing column
+                std_item.setFlags(std_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.item_model.setItem(row, column, std_item)
+        else:
+            self.item_model.setItem(row, column, item)
+    
+    def item(self, row, column):
+        """Get an item at the specified position."""
+        return self.item_model.item(row, column)
+    
+    def removeRow(self, row):
+        """Remove a row."""
+        return self.item_model.removeRow(row)
+    
+    def insertRow(self, row):
+        """Insert a row."""
+        return self.item_model.insertRow(row)
+    
+    def selectRow(self, row):
+        """Select a row."""
+        selection_model = self.selectionModel()
+        selection_model.clearSelection()
+        selection_model.select(
+            self.item_model.index(row, 0),
+            selection_model.SelectionFlag.SelectCurrent | selection_model.SelectionFlag.Rows
+        )
+    
+    def currentRow(self):
+        """Get the current row."""
+        return self.currentIndex().row()
+    
+    def resizeColumnsToContents(self):
+        """Resize columns to fit content."""
+        super().resizeColumnsToContents()
+    
+    def setColumnCount(self, count):
+        """Set the number of columns."""
+        self.item_model.setColumnCount(count)
+    
+    def setHorizontalHeaderLabels(self, labels):
+        """Set the horizontal header labels."""
+        self.item_model.setHorizontalHeaderLabels(labels)
 
 
 class AnalysisWorker(QThread):
@@ -58,6 +514,64 @@ class AnalysisWorker(QThread):
             self.analysis_error.emit(str(e))
 
 
+class MasterAnalysisWorker(QThread):
+    """Background worker for running master fixture analysis."""
+    
+    progress_update = pyqtSignal(str)
+    analysis_complete = pyqtSignal(dict)
+    analysis_error = pyqtSignal(str)
+    
+    def __init__(self, controller: MVRController, fixture_type_attributes: Dict[str, List[str]], output_format: str, ma3_config: dict = None):
+        super().__init__()
+        self.controller = controller
+        self.fixture_type_attributes = fixture_type_attributes
+        self.output_format = output_format
+        self.ma3_config = ma3_config
+    
+    def run(self):
+        """Run the master analysis in background thread."""
+        try:
+            self.progress_update.emit("Analyzing master fixtures...")
+            result = self.controller.analyze_master_fixtures(self.fixture_type_attributes, self.output_format, self.ma3_config)
+            
+            if result["success"]:
+                self.analysis_complete.emit(result)
+            else:
+                self.analysis_error.emit(result["error"])
+                
+        except Exception as e:
+            self.analysis_error.emit(str(e))
+
+
+class RemoteAnalysisWorker(QThread):
+    """Background worker for running remote fixture analysis."""
+    
+    progress_update = pyqtSignal(str)
+    analysis_complete = pyqtSignal(dict)
+    analysis_error = pyqtSignal(str)
+    
+    def __init__(self, controller: MVRController, fixture_type_attributes: Dict[str, List[str]], output_format: str, ma3_config: dict = None):
+        super().__init__()
+        self.controller = controller
+        self.fixture_type_attributes = fixture_type_attributes
+        self.output_format = output_format
+        self.ma3_config = ma3_config
+    
+    def run(self):
+        """Run the remote analysis in background thread."""
+        try:
+            self.progress_update.emit("Analyzing remote fixtures...")
+            result = self.controller.analyze_remote_fixtures(self.fixture_type_attributes, self.output_format, self.ma3_config)
+            
+            if result["success"]:
+                self.analysis_complete.emit(result)
+            else:
+                self.analysis_error.emit(result["error"])
+                
+        except Exception as e:
+            self.analysis_error.emit(str(e))
+
+
 class MVRApp(QMainWindow):
     """Main application window - Clean UI only."""
     
@@ -65,19 +579,36 @@ class MVRApp(QMainWindow):
         super().__init__()
         self.controller = MVRController()
         self.config = Config()
-        self.current_results = None
-        self.worker = None
-        self.fixture_type_attributes = {}  # Store per-fixture-type attributes
+        
+        # Master fixtures data
+        self.master_results = None
+        self.master_worker = None
+        self.master_fixture_type_attributes = {}
+        
+        # Remote fixtures data  
+        self.remote_results = None
+        self.remote_worker = None
+        self.remote_fixture_type_attributes = {}
+        
+        # Alignment data
+        self.alignment_results = None
+        
+        # Shared data
         self.ma3_config = None  # Store MA3 configuration
         self.current_project_path = None  # Current project file path
         self.project_dirty = False  # Whether project has unsaved changes
+        
+        # Legacy single-dataset support (for backward compatibility)
+        self.fixture_type_attributes = {}
+        self.current_results = None
+        
         self.setup_ui()
         self.update_ui_state()
     
     def setup_ui(self):
-        """Create the main user interface."""
-        self.setWindowTitle("AttributeAddresser")
-        self.setGeometry(100, 100, 1200, 800)
+        """Create the main user interface with tabbed Master/Remote workflow."""
+        self.setWindowTitle("AttributeAddresser - Master & Remote Alignment")
+        self.setGeometry(100, 100, 1400, 900)  # Slightly larger for tabbed interface
         
         # Additional window properties for better branding
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowTitleHint)
@@ -89,34 +620,28 @@ class MVRApp(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # Main layout - Single vertical column
+        # Main layout
         main_layout = QVBoxLayout(central_widget)
         
-        # Create horizontal layout for the first three steps
-        steps_horizontal_layout = QHBoxLayout()
+        # Create tab widget
+        self.tab_widget = QTabWidget()
+        main_layout.addWidget(self.tab_widget)
         
-        # Add first three control sections to horizontal layout with equal stretch
-        control_sections = self.create_control_sections()
-        for section in control_sections:
-            steps_horizontal_layout.addWidget(section, 1)  # Each section gets equal stretch (1/3 of space)
+        # Create tabs
+        self.create_master_tab()
+        self.create_remote_tab()
+        self.create_alignment_tab()
         
-        # Add the horizontal layout to main layout
-        main_layout.addLayout(steps_horizontal_layout)
-        
-        # Add results section in the middle
-        results_section = self.create_results_section()
-        main_layout.addWidget(results_section, 1)  # Give it stretch priority
-        
-        # Add export section at the bottom
+        # Add shared export section at the bottom
         export_section = self.create_export_section()
         main_layout.addWidget(export_section)
         
         # Status bar
         self.status_bar = self.statusBar()
-        self.status_bar.showMessage("Ready")
+        self.status_bar.showMessage("Ready - Start with Master fixtures")
         
         # Set minimum window size
-        self.setMinimumWidth(800)
+        self.setMinimumWidth(1000)
         
         # Initialize MA3 config button visibility based on current format
         current_format = self.format_combo.currentText()
@@ -125,6 +650,68 @@ class MVRApp(QMainWindow):
         # Load MA3 config if format is ma3_xml and config is None
         if current_format == "ma3_xml" and self.ma3_config is None:
             self.ma3_config = self.config.get_ma3_xml_config()
+    
+    def create_master_tab(self):
+        """Create the Master fixtures tab."""
+        master_widget = QWidget()
+        master_layout = QVBoxLayout(master_widget)
+        
+        # Create horizontal layout for the first three steps
+        steps_horizontal_layout = QHBoxLayout()
+        
+        # Add master control sections to horizontal layout with equal stretch
+        master_control_sections = self.create_master_control_sections()
+        for section in master_control_sections:
+            steps_horizontal_layout.addWidget(section, 1)
+        
+        # Add the horizontal layout to master layout
+        master_layout.addLayout(steps_horizontal_layout)
+        
+        # Add master results section in the middle
+        master_results_section = self.create_master_results_section()
+        master_layout.addWidget(master_results_section, 1)
+        
+        # Add tab to widget
+        self.tab_widget.addTab(master_widget, "📋 Master Fixtures")
+    
+    def create_remote_tab(self):
+        """Create the Remote fixtures tab."""
+        remote_widget = QWidget()
+        remote_layout = QVBoxLayout(remote_widget)
+        
+        # Create horizontal layout for the first three steps
+        steps_horizontal_layout = QHBoxLayout()
+        
+        # Add remote control sections to horizontal layout with equal stretch
+        remote_control_sections = self.create_remote_control_sections()
+        for section in remote_control_sections:
+            steps_horizontal_layout.addWidget(section, 1)
+        
+        # Add the horizontal layout to remote layout
+        remote_layout.addLayout(steps_horizontal_layout)
+        
+        # Add remote results section in the middle
+        remote_results_section = self.create_remote_results_section()
+        remote_layout.addWidget(remote_results_section, 1)
+        
+        # Add tab to widget
+        self.tab_widget.addTab(remote_widget, "📡 Remote Fixtures")
+    
+    def create_alignment_tab(self):
+        """Create the Alignment results tab."""
+        alignment_widget = QWidget()
+        alignment_layout = QVBoxLayout(alignment_widget)
+        
+        # Add alignment status and controls
+        alignment_control_section = self.create_alignment_control_section()
+        alignment_layout.addWidget(alignment_control_section)
+        
+        # Add alignment results section
+        alignment_results_section = self.create_alignment_results_section()
+        alignment_layout.addWidget(alignment_results_section, 1)
+        
+        # Add tab to widget
+        self.tab_widget.addTab(alignment_widget, "🔀 Routing")
     
     def create_menu_bar(self):
         """Create the application menu bar."""
@@ -271,12 +858,186 @@ class MVRApp(QMainWindow):
         
         return sections
     
+    def create_master_control_sections(self) -> List[QWidget]:
+        """Create master control sections as separate group boxes."""
+        sections = []
+        
+        # File selection group
+        file_group = QGroupBox("1. Master File Selection")
+        file_layout = QVBoxLayout(file_group)
+        
+        # Import type selection
+        import_type_layout = QHBoxLayout()
+        import_type_layout.addWidget(QLabel("Import Type:"))
+        
+        self.master_import_type_group = QButtonGroup()
+        self.master_mvr_radio = QRadioButton("MVR File")
+        self.master_csv_radio = QRadioButton("CSV File")
+        self.master_mvr_radio.setChecked(True)  # Default to MVR
+        
+        self.master_import_type_group.addButton(self.master_mvr_radio)
+        self.master_import_type_group.addButton(self.master_csv_radio)
+        
+        import_type_layout.addWidget(self.master_mvr_radio)
+        import_type_layout.addWidget(self.master_csv_radio)
+        import_type_layout.addStretch()
+        
+        file_layout.addLayout(import_type_layout)
+        
+        # File status label
+        self.master_file_label = QLabel("No master file selected")
+        self.master_file_label.setWordWrap(True)
+        self.master_file_label.setStyleSheet("padding: 10px; border: 1px solid #ccc; border-radius: 4px;")
+        file_layout.addWidget(self.master_file_label)
+        
+        # Browse button
+        self.master_browse_btn = QPushButton("Browse Master MVR File...")
+        self.master_browse_btn.clicked.connect(self.browse_master_file)
+        file_layout.addWidget(self.master_browse_btn)
+        
+        # Connect radio buttons to update browse button text
+        self.master_mvr_radio.toggled.connect(self.update_master_browse_button)
+        self.master_csv_radio.toggled.connect(self.update_master_browse_button)
+        
+        sections.append(file_group)
+        
+        # GDTF Matching group
+        gdtf_group = QGroupBox("2. Master GDTF Profile Matching")
+        gdtf_layout = QVBoxLayout(gdtf_group)
+        
+        self.master_gdtf_status_label = QLabel("Load a master file first")
+        self.master_gdtf_status_label.setWordWrap(True)
+        self.master_gdtf_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+        gdtf_layout.addWidget(self.master_gdtf_status_label)
+        
+        # Manual matching button
+        self.master_match_gdtf_btn = QPushButton("Match Master GDTF Profiles")
+        self.master_match_gdtf_btn.clicked.connect(self.match_master_gdtf_profiles)
+        self.master_match_gdtf_btn.setEnabled(False)
+        self.master_match_gdtf_btn.setToolTip("Match master fixture types to GDTF profiles")
+        gdtf_layout.addWidget(self.master_match_gdtf_btn)
+        
+        sections.append(gdtf_group)
+        
+        # Attribute Selection group
+        attribute_group = QGroupBox("3. Master Attribute Selection")
+        attribute_layout = QVBoxLayout(attribute_group)
+        
+        self.master_attribute_status_label = QLabel("Complete steps 1-2 first")
+        self.master_attribute_status_label.setWordWrap(True)
+        self.master_attribute_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+        attribute_layout.addWidget(self.master_attribute_status_label)
+        
+        # Select Attributes button
+        self.master_select_attrs_btn = QPushButton("Select Master Attributes")
+        self.master_select_attrs_btn.clicked.connect(self.select_master_attributes)
+        self.master_select_attrs_btn.setEnabled(False)
+        attribute_layout.addWidget(self.master_select_attrs_btn)
+        
+        sections.append(attribute_group)
+        
+        return sections
+    
+    def create_remote_control_sections(self) -> List[QWidget]:
+        """Create remote control sections as separate group boxes."""
+        sections = []
+        
+        # File selection group
+        file_group = QGroupBox("1. Remote File Selection")
+        file_layout = QVBoxLayout(file_group)
+        
+        # Import type selection
+        import_type_layout = QHBoxLayout()
+        import_type_layout.addWidget(QLabel("Import Type:"))
+        
+        self.remote_import_type_group = QButtonGroup()
+        self.remote_mvr_radio = QRadioButton("MVR File")
+        self.remote_csv_radio = QRadioButton("CSV File")
+        self.remote_mvr_radio.setChecked(True)  # Default to MVR
+        
+        self.remote_import_type_group.addButton(self.remote_mvr_radio)
+        self.remote_import_type_group.addButton(self.remote_csv_radio)
+        
+        import_type_layout.addWidget(self.remote_mvr_radio)
+        import_type_layout.addWidget(self.remote_csv_radio)
+        import_type_layout.addStretch()
+        
+        file_layout.addLayout(import_type_layout)
+        
+        # File status label
+        self.remote_file_label = QLabel("No remote file selected")
+        self.remote_file_label.setWordWrap(True)
+        self.remote_file_label.setStyleSheet("padding: 10px; border: 1px solid #ccc; border-radius: 4px;")
+        file_layout.addWidget(self.remote_file_label)
+        
+        # Browse button
+        self.remote_browse_btn = QPushButton("Browse Remote MVR File...")
+        self.remote_browse_btn.clicked.connect(self.browse_remote_file)
+        file_layout.addWidget(self.remote_browse_btn)
+        
+        # Connect radio buttons to update browse button text
+        self.remote_mvr_radio.toggled.connect(self.update_remote_browse_button)
+        self.remote_csv_radio.toggled.connect(self.update_remote_browse_button)
+        
+        sections.append(file_group)
+        
+        # GDTF Matching group
+        gdtf_group = QGroupBox("2. Remote GDTF Profile Matching")
+        gdtf_layout = QVBoxLayout(gdtf_group)
+        
+        self.remote_gdtf_status_label = QLabel("Load a remote file first")
+        self.remote_gdtf_status_label.setWordWrap(True)
+        self.remote_gdtf_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+        gdtf_layout.addWidget(self.remote_gdtf_status_label)
+        
+        # Manual matching button
+        self.remote_match_gdtf_btn = QPushButton("Match Remote GDTF Profiles")
+        self.remote_match_gdtf_btn.clicked.connect(self.match_remote_gdtf_profiles)
+        self.remote_match_gdtf_btn.setEnabled(False)
+        self.remote_match_gdtf_btn.setToolTip("Match remote fixture types to GDTF profiles")
+        gdtf_layout.addWidget(self.remote_match_gdtf_btn)
+        
+        sections.append(gdtf_group)
+        
+        # Attribute Selection group
+        attribute_group = QGroupBox("3. Remote Attribute Selection")
+        attribute_layout = QVBoxLayout(attribute_group)
+        
+        self.remote_attribute_status_label = QLabel("Complete steps 1-2 first")
+        self.remote_attribute_status_label.setWordWrap(True)
+        self.remote_attribute_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+        attribute_layout.addWidget(self.remote_attribute_status_label)
+        
+        # Select Attributes button
+        self.remote_select_attrs_btn = QPushButton("Select Remote Attributes")
+        self.remote_select_attrs_btn.clicked.connect(self.select_remote_attributes)
+        self.remote_select_attrs_btn.setEnabled(False)
+        attribute_layout.addWidget(self.remote_select_attrs_btn)
+        
+        sections.append(attribute_group)
+        
+        return sections
+    
     def update_browse_button(self):
         """Update the browse button text based on selected import type."""
         if self.mvr_radio.isChecked():
             self.browse_btn.setText("Browse MVR File...")
         else:
             self.browse_btn.setText("Browse CSV File...")
+    
+    def update_master_browse_button(self):
+        """Update the master browse button text based on selected import type."""
+        if self.master_mvr_radio.isChecked():
+            self.master_browse_btn.setText("Browse Master MVR File...")
+        else:
+            self.master_browse_btn.setText("Browse Master CSV File...")
+    
+    def update_remote_browse_button(self):
+        """Update the remote browse button text based on selected import type."""
+        if self.remote_mvr_radio.isChecked():
+            self.remote_browse_btn.setText("Browse Remote MVR File...")
+        else:
+            self.remote_browse_btn.setText("Browse Remote CSV File...")
     
     def browse_file(self):
         """Open file dialog to select MVR or CSV file based on selection."""
@@ -286,228 +1047,248 @@ class MVRApp(QMainWindow):
             self.browse_csv_file()
     
     def browse_mvr_file(self):
-        """Open file dialog to select MVR file."""
-        # Get last used directory
-        last_dir = self.config.get_last_mvr_directory()
-        start_dir = last_dir if last_dir and os.path.exists(last_dir) else ""
-        
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select MVR File",
-            start_dir,
-            "MVR Files (*.mvr);;All Files (*)"
-        )
-        
-        if file_path:
-            # Save the directory for next time
-            self.config.set_last_mvr_directory(str(Path(file_path).parent))
-            self.load_mvr_file(file_path)
+        """Open MVR import dialog."""
+        try:
+            dialog = MVRImportDialog(self, self.config)
+            
+            # Connect the import successful signal
+            dialog.import_successful.connect(self.load_csv_fixtures)
+            
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error opening MVR import dialog:\n{str(e)}")
     
-    def create_results_section(self) -> QWidget:
-        """Create the results section with hierarchical tree view."""
-        # Results group
-        results_group = QGroupBox("Analysis Results")
-        layout = QVBoxLayout(results_group)
+    def browse_csv_file(self):
+        """Open CSV import dialog."""
+        try:
+            dialog = CSVImportDialog(self, self.config)
+            
+            # Connect the import successful signal
+            dialog.import_successful.connect(self.load_csv_fixtures)
+            
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error opening CSV import dialog:\n{str(e)}")
+    
+    def load_csv_fixtures(self, fixture_matches: List):
+        """Load fixtures from CSV import."""
+        try:
+            result = self.controller.load_csv_fixtures(fixture_matches)
+            
+            if result["success"]:
+                # Update UI
+                self.file_label.setText(f"✓ CSV Import ({result['total_fixtures']} fixtures)")
+                self.file_label.setStyleSheet("padding: 10px; border: 1px solid #4CAF50; border-radius: 4px; background-color: #E8F5E8; color: #2E7D32; font-weight: bold;")
+                
+                # Update GDTF status
+                self._update_gdtf_status(result["matched_fixtures"], result["total_fixtures"])
+                
+                # Update UI state
+                self.update_ui_state()
+                self.mark_project_dirty()
+                
+                # Trigger automatic analysis
+                self._trigger_automatic_analysis()
+                
+                self.status_bar.showMessage(f"Loaded {result['total_fixtures']} fixtures from CSV import")
+                
+            else:
+                QMessageBox.critical(self, "Error", f"Failed to load CSV fixtures:\n{result['error']}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading CSV fixtures:\n{str(e)}")
+    
+    def load_mvr_file(self, file_path: str):
+        """Load an MVR file using the controller."""
+        self.status_bar.showMessage("Loading MVR file...")
         
-        # Results status label
-        self.results_status = QLabel("Complete steps 1-3 for automatic analysis")
-        self.results_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
-        layout.addWidget(self.results_status)
-        
-        # Results tree widget
-        self.results_tree = QTreeWidget()
-        self.results_tree.setAlternatingRowColors(True)
-        self.results_tree.setRootIsDecorated(True)
-        self.results_tree.setIndentation(20)
-        
-        # Set initial headers
-        self.results_tree.setHeaderLabels(["Name", "Type", "Value", "Universe", "Channel", "DMX"])
-        
-        # Set initial empty state
-        self._setup_empty_results_tree()
-        
-        layout.addWidget(self.results_tree)
-        
-        return results_group
+        try:
+            result = self.controller.load_mvr_file(file_path)
+            
+            if result["success"]:
+                # Update UI
+                self.file_label.setText(f"✓ {Path(file_path).name}")
+                self.file_label.setStyleSheet("padding: 10px; border: 1px solid #4CAF50; border-radius: 4px; background-color: #E8F5E8; color: #2E7D32; font-weight: bold;")
+                
+                # Update GDTF status
+                self._update_gdtf_status(result["matched_fixtures"], result["total_fixtures"])
+                
+                # Update UI state
+                self.update_ui_state()
+                self.mark_project_dirty()
+                
+                # Trigger automatic analysis
+                self._trigger_automatic_analysis()
+                
+                self.status_bar.showMessage(f"Loaded {result['total_fixtures']} fixtures from {Path(file_path).name}")
+                
+            else:
+                QMessageBox.critical(self, "Error", f"Failed to load MVR file:\n{result['error']}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading file:\n{str(e)}")
+    
+    def match_gdtf_profiles(self):
+        """Open GDTF matching dialog."""
+        try:
+            # Check if we have fixtures loaded
+            if not self.controller.matched_fixtures:
+                QMessageBox.warning(self, "No Fixtures", "Please load fixtures first (MVR or CSV).")
+                return
+            
+            dialog = GDTFMatchingDialog(self, self.controller, self.config)
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                # Get the fixture type matches from the dialog
+                fixture_type_matches = dialog.get_fixture_type_matches()
+                
+                # Update matches in controller
+                result = self.controller.update_fixture_matches(fixture_type_matches)
+                
+                if result["success"]:
+                    matched_count = result["matched_fixtures"]
+                    total_count = result["total_fixtures"]
+                    
+                    # Update GDTF status
+                    self._update_gdtf_status(matched_count, total_count)
+                    
+                    # Update UI state
+                    self.update_ui_state()
+                    self.mark_project_dirty()
+                    
+                    # Trigger automatic analysis
+                    self._trigger_automatic_analysis()
+                    
+                    self.status_bar.showMessage(f"Updated fixture matches: {matched_count}/{total_count} matched")
+                else:
+                    QMessageBox.critical(self, "Error", f"Failed to update matches:\n{result['error']}")
+                    
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error in GDTF matching:\n{str(e)}")
+    
+    def load_external_gdtf_profiles(self):
+        """Load external GDTF profiles for CSV matching."""
+        try:
+            # Get the last used directory
+            last_dir = self.config.get_external_gdtf_folder() if self.config else ""
+            
+            folder_path = QFileDialog.getExistingDirectory(
+                self, 
+                "Select GDTF Profiles Folder", 
+                last_dir
+            )
+            
+            if not folder_path:
+                return
+            
+            # Load profiles
+            result = self.controller.load_external_gdtf_profiles(folder_path)
+            
+            if result["success"]:
+                profile_count = result["profiles_loaded"]
+                
+                # Save folder path
+                if self.config:
+                    self.config.set_external_gdtf_folder(folder_path)
+                
+                # Update UI state
+                self.update_ui_state()
+                self.mark_project_dirty()
+                
+                # Trigger automatic analysis since new GDTF profiles might affect matching
+                self._trigger_automatic_analysis()
+                
+                QMessageBox.information(
+                    self, 
+                    "External GDTF Profiles Loaded", 
+                    f"Successfully loaded {profile_count} GDTF profiles from:\n{folder_path}\n\n"
+                    f"Use 'Match GDTF Profiles' to match these profiles to your fixtures."
+                )
+                
+                self.status_bar.showMessage(f"Loaded {profile_count} external GDTF profiles")
+                
+            else:
+                QMessageBox.critical(self, "Error", f"Failed to load external GDTF profiles:\n{result['error']}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading external GDTF profiles:\n{str(e)}")
+    
 
-    def create_export_section(self) -> QWidget:
-        """Create the export section with format selection and export controls."""
-        # Export group
-        export_group = QGroupBox("4. Export")
-        export_layout = QHBoxLayout(export_group)
-        
-        # Output format selection
-        export_layout.addWidget(QLabel("Output Format:"))
-        self.format_combo = QComboBox()
-        self.format_combo.addItems(["text", "csv", "json", "ma3_xml"])
-        self.format_combo.setCurrentText(self.config.get_output_format())
-        self.format_combo.currentTextChanged.connect(self.on_format_changed)
-        export_layout.addWidget(self.format_combo)
-        
-        # MA3 XML configuration button (initially hidden)
-        self.ma3_config_btn = QPushButton("MA3 XML Settings")
-        self.ma3_config_btn.clicked.connect(self.configure_ma3_xml)
-        self.ma3_config_btn.setVisible(False)
-        export_layout.addWidget(self.ma3_config_btn)
-        
-        # Progress bar for automatic analysis
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        export_layout.addWidget(self.progress_bar)
-        
-        # Export button
-        self.export_btn = QPushButton("Export Results")
-        self.export_btn.clicked.connect(self.export_results)
-        self.export_btn.setEnabled(False)
-        export_layout.addWidget(self.export_btn)
-        
-        return export_group
-
+    
+    def load_master_csv_fixtures(self, fixture_matches: List):
+        """Load master fixtures from CSV import."""
+        try:
+            result = self.controller.load_master_csv_fixtures(fixture_matches)
+            
+            if result["success"]:
+                # Update UI
+                self.master_file_label.setText(f"✓ Master CSV Import ({result['total_fixtures']} fixtures)")
+                self.master_file_label.setStyleSheet("padding: 10px; border: 1px solid #4CAF50; border-radius: 4px; background-color: #E8F5E8; color: #2E7D32; font-weight: bold;")
+                
+                # Store master results
+                self.master_results = result
+                
+                # Update UI state
+                self.update_ui_state()
+                self.mark_project_dirty()
+                
+            else:
+                QMessageBox.critical(self, "Error", f"Error loading master CSV: {result['error']}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading master CSV:\n{str(e)}")
+    
+    def browse_master_file(self):
+        """Open file dialog to select master MVR or CSV file based on selection."""
+        if self.master_mvr_radio.isChecked():
+            self.browse_master_mvr_file()
+        else:
+            self.browse_master_csv_file()
+    
+    def browse_master_mvr_file(self):
+        """Open MVR import dialog for master fixtures."""
+        try:
+            dialog = MVRImportDialog(self, self.config)
+            dialog.setWindowTitle("Master MVR Import - Select Fixtures")
+            
+            # Connect the import successful signal
+            dialog.import_successful.connect(self.load_master_csv_fixtures)
+            
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error opening master MVR import dialog:\n{str(e)}")
+    
+    def browse_master_csv_file(self):
+        """Open CSV import dialog for master fixtures."""
+        try:
+            dialog = CSVImportDialog(self, self.config)
+            
+            # Connect the import successful signal
+            dialog.import_successful.connect(self.load_master_csv_fixtures)
+            
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error opening master CSV import dialog:\n{str(e)}")
+    
     def _setup_empty_results_tree(self):
-        """Set up the results tree in empty state."""
-        self.results_tree.clear()
-        
-        # Add a status item
-        status_item = QTreeWidgetItem()
-        status_item.setText(0, "Complete steps 1-3 for automatic analysis")
-        status_item.setForeground(0, QColor("gray"))
-        
-        # Set italic font
-        font = QFont()
-        font.setItalic(True)
-        status_item.setFont(0, font)
-        
-        self.results_tree.addTopLevelItem(status_item)
-        
-        # Resize to fit content
-        self.results_tree.resizeColumnToContents(0)
+        """Legacy method - no longer used in tabbed interface."""
+        pass
 
     def _populate_results_tree(self, analysis_results: dict):
-        """Populate the results tree with hierarchical analysis data."""
-        if not analysis_results or not analysis_results.get("success"):
-            self._show_error_in_tree("Analysis failed")
-            return
-        
-        results = analysis_results.get("analysis_results")
-        if not results:
-            self._show_error_in_tree("No analysis results available")
-            return
-        
-        fixtures = results.fixtures
-        if not fixtures:
-            self._show_error_in_tree("No fixtures to display")
-            return
-        
-        # Clear the tree
-        self.results_tree.clear()
-        
-        # Sort fixtures by fixture_id
-        sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], key=lambda x: x.fixture_id)
-        
-        for fixture in sorted_fixtures:
-            # Create fixture parent item
-            fixture_type = fixture.gdtf_spec or "Unknown"
-            if fixture_type.endswith('.gdtf'):
-                fixture_type = fixture_type[:-5]
-            
-            # Get fixture type to determine which attributes to show
-            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
-            fixture_attributes = self.fixture_type_attributes.get(fixture_type_clean, [])
-            
-            # Create fixture item with summary info
-            fixture_item = QTreeWidgetItem()
-            fixture_item.setText(0, f"Fixture {fixture.fixture_id}: {fixture.name}")
-            fixture_item.setText(1, "FIXTURE")
-            fixture_item.setText(2, fixture_type)
-            fixture_item.setText(3, str(fixture.base_address))
-            fixture_item.setText(4, fixture.gdtf_mode or "")
-            
-            # Set fixture item styling
-            font = QFont()
-            font.setBold(True)
-            fixture_item.setFont(0, font)
-            fixture_item.setForeground(0, QColor("darkblue"))
-            
-            # Add attribute child items
-            if hasattr(fixture, 'absolute_addresses') and fixture.absolute_addresses:
-                for attr_name in fixture_attributes:
-                    if attr_name in fixture.absolute_addresses:
-                        addr_info = fixture.absolute_addresses[attr_name]
-                        universe = addr_info.get("universe", "?")
-                        channel = addr_info.get("channel", "?")
-                        absolute_address = addr_info.get("absolute_address", "?")
-                        
-                        # Create attribute child item
-                        attr_item = QTreeWidgetItem()
-                        attr_item.setText(0, attr_name)
-                        attr_item.setText(1, "ATTRIBUTE")
-                        attr_item.setText(2, f"{universe}.{channel}")
-                        attr_item.setText(3, str(universe))
-                        attr_item.setText(4, str(channel))
-                        attr_item.setText(5, str(absolute_address))
-                        
-                        # Set attribute item styling
-                        attr_item.setForeground(0, QColor("darkgreen"))
-                        
-                        fixture_item.addChild(attr_item)
-                    else:
-                        # Attribute selected but not available in GDTF
-                        attr_item = QTreeWidgetItem()
-                        attr_item.setText(0, attr_name)
-                        attr_item.setText(1, "ATTRIBUTE")
-                        attr_item.setText(2, "N/A - Not in GDTF")
-                        
-                        # Set N/A styling
-                        attr_item.setForeground(0, QColor("orange"))
-                        attr_item.setForeground(2, QColor("orange"))
-                        
-                        fixture_item.addChild(attr_item)
-            
-            # If no attributes, add a placeholder
-            if fixture_item.childCount() == 0:
-                no_attr_item = QTreeWidgetItem()
-                no_attr_item.setText(0, "No attributes selected")
-                no_attr_item.setForeground(0, QColor("gray"))
-                
-                font = QFont()
-                font.setItalic(True)
-                no_attr_item.setFont(0, font)
-                
-                fixture_item.addChild(no_attr_item)
-            
-            # Add fixture to tree
-            self.results_tree.addTopLevelItem(fixture_item)
-            
-            # Expand the fixture to show attributes
-            fixture_item.setExpanded(True)
-        
-        # Resize columns to fit content
-        for i in range(self.results_tree.columnCount()):
-            self.results_tree.resizeColumnToContents(i)
+        """Legacy method - no longer used in tabbed interface."""
+        pass
 
     def _show_error_in_tree(self, error_message: str):
-        """Show an error message in the tree."""
-        self.results_tree.clear()
-        
-        error_item = QTreeWidgetItem()
-        error_item.setText(0, error_message)
-        error_item.setForeground(0, QColor("red"))
-        
-        # Set bold font
-        font = QFont()
-        font.setBold(True)
-        error_item.setFont(0, font)
-        
-        self.results_tree.addTopLevelItem(error_item)
-        
-        # Resize to fit content
-        self.results_tree.resizeColumnToContents(0)
+        """Legacy method - no longer used in tabbed interface."""
+        pass
         
     def _clear_results_tree(self):
-        """Clear the results tree and show empty state."""
-        self._setup_empty_results_tree()
-        self.results_status.setText("Complete steps 1-3 for automatic analysis")
-        self.results_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
+        """Legacy method - no longer used in tabbed interface."""
+        pass
 
     def _should_trigger_analysis(self) -> bool:
         """Check if automatic analysis should be triggered."""
@@ -534,40 +1315,112 @@ class MVRApp(QMainWindow):
         return True
 
     def _trigger_automatic_analysis(self):
-        """Trigger automatic analysis if conditions are met."""
-        if not self._should_trigger_analysis():
-            self._clear_results_tree()
+        """Legacy method - automatic analysis is now handled per tab."""
+        pass
+    
+    def _trigger_master_analysis(self):
+        """Trigger automatic analysis for master fixtures."""
+        if not self._should_trigger_master_analysis():
             return
             
         # Prevent multiple concurrent analyses
-        if self.worker is not None:
+        if self.master_worker is not None:
             return
             
-        self.results_status.setText("Analyzing automatically...")
-        self.results_status.setStyleSheet("color: blue; font-weight: bold; padding: 10px;")
+        self.status_bar.showMessage("Analyzing master fixtures...")
         
-        # Get output format
+        # Get output format and MA3 config
         output_format = self.format_combo.currentText()
+        ma3_config = self.ma3_config if output_format == "ma3_xml" else None
         
-        # Handle MA3 XML configuration
-        ma3_config = None
-        if output_format == "ma3_xml":
-            if self.ma3_config is None:
-                self.results_status.setText("Configure MA3 XML settings first")
-                self.results_status.setStyleSheet("color: orange; font-weight: bold; padding: 10px;")
-                return
-            ma3_config = self.ma3_config
+        # Start analysis worker
+        self.master_worker = MasterAnalysisWorker(
+            self.controller, 
+            self.master_fixture_type_attributes, 
+            output_format, 
+            ma3_config
+        )
         
-        # Show progress
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        self.master_worker.progress_update.connect(self.update_progress)
+        self.master_worker.analysis_complete.connect(self.master_analysis_complete)
+        self.master_worker.analysis_error.connect(self.master_analysis_error)
+        self.master_worker.start()
+    
+    def _trigger_remote_analysis(self):
+        """Trigger automatic analysis for remote fixtures."""
+        if not self._should_trigger_remote_analysis():
+            return
+            
+        # Prevent multiple concurrent analyses
+        if self.remote_worker is not None:
+            return
+            
+        self.status_bar.showMessage("Analyzing remote fixtures...")
         
-        # Start analysis in background thread
-        self.worker = AnalysisWorker(self.controller, self.fixture_type_attributes, output_format, ma3_config)
-        self.worker.progress_update.connect(self.update_progress)
-        self.worker.analysis_complete.connect(self.analysis_complete)
-        self.worker.analysis_error.connect(self.analysis_error)
-        self.worker.start()
+        # Get output format and MA3 config
+        output_format = self.format_combo.currentText()
+        ma3_config = self.ma3_config if output_format == "ma3_xml" else None
+        
+        # Start analysis worker
+        self.remote_worker = RemoteAnalysisWorker(
+            self.controller, 
+            self.remote_fixture_type_attributes, 
+            output_format, 
+            ma3_config
+        )
+        
+        self.remote_worker.progress_update.connect(self.update_progress)
+        self.remote_worker.analysis_complete.connect(self.remote_analysis_complete)
+        self.remote_worker.analysis_error.connect(self.remote_analysis_error)
+        self.remote_worker.start()
+    
+    def _should_trigger_master_analysis(self) -> bool:
+        """Check if automatic analysis should be triggered for master fixtures."""
+        # Check if we have everything needed for master analysis
+        status = self.controller.get_master_status()
+        
+        # Step 1: File loaded
+        if not status["file_loaded"]:
+            return False
+            
+        # Step 2: GDTF matching (at least some fixtures matched)
+        if status["matched_fixtures"] <= 0:
+            return False
+            
+        # Step 3: Attributes selected
+        if not self.master_fixture_type_attributes:
+            return False
+            
+        # Check if any attributes are actually selected
+        total_attributes = sum(len(attrs) for attrs in self.master_fixture_type_attributes.values())
+        if total_attributes <= 0:
+            return False
+            
+        return True
+    
+    def _should_trigger_remote_analysis(self) -> bool:
+        """Check if automatic analysis should be triggered for remote fixtures."""
+        # Check if we have everything needed for remote analysis
+        status = self.controller.get_remote_status()
+        
+        # Step 1: File loaded
+        if not status["file_loaded"]:
+            return False
+            
+        # Step 2: GDTF matching (at least some fixtures matched)
+        if status["matched_fixtures"] <= 0:
+            return False
+            
+        # Step 3: Attributes selected
+        if not self.remote_fixture_type_attributes:
+            return False
+            
+        # Check if any attributes are actually selected
+        total_attributes = sum(len(attrs) for attrs in self.remote_fixture_type_attributes.values())
+        if total_attributes <= 0:
+            return False
+            
+        return True
 
     def _update_results_status(self):
         """Update the results status based on current state."""
@@ -751,7 +1604,7 @@ class MVRApp(QMainWindow):
         """Open attribute selection dialog and save selections independently."""
         try:
             # Open the fixture attribute dialog with existing selections
-            dialog = FixtureAttributeDialog(self, self.controller, self.config, self.fixture_type_attributes)
+            dialog = FixtureAttributeDialog(self, self.controller, self.config, self.fixture_type_attributes, data_source="current")
             
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 # Get selected attributes per fixture type
@@ -778,29 +1631,1111 @@ class MVRApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error in attribute selection:\n{str(e)}")
     
-
+    def select_master_attributes(self):
+        """Open attribute selection dialog and save selections independently."""
+        try:
+            # Open the fixture attribute dialog with existing selections
+            dialog = FixtureAttributeDialog(self, self.controller, self.config, self.master_fixture_type_attributes, data_source="master")
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                # Get selected attributes per fixture type
+                self.master_fixture_type_attributes = dialog.get_fixture_type_attributes()
+                
+                # Validate that we have some attributes selected
+                total_selected = sum(len(attrs) for attrs in self.master_fixture_type_attributes.values())
+                if total_selected == 0:
+                    QMessageBox.warning(self, "No Attributes", "No attributes were selected for master fixtures. You can modify your selection anytime.")
+                    self.master_fixture_type_attributes = {}
+                else:
+                    # Store the attributes in config (for future reference)
+                    self.config.set_fixture_type_attributes(self.master_fixture_type_attributes)
+                    
+                    # Mark project as dirty
+                    self.mark_project_dirty()
+                
+                # Update UI state after any changes
+                self.update_ui_state()
+                
+                # Trigger automatic analysis for master fixtures
+                self._trigger_master_analysis()
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error in master attribute selection:\n{str(e)}")
+    
+    def match_master_gdtf_profiles(self):
+        """Open GDTF matching dialog for master fixtures."""
+        try:
+            # Check if we have master fixtures loaded
+            if not self.controller.master_matched_fixtures:
+                QMessageBox.warning(self, "No Master Fixtures", "Please load master fixtures first (MVR or CSV).")
+                return
+            
+            # Use existing dialog but set it to work with master fixtures
+            dialog = GDTFMatchingDialog(self, self.controller, self.config)
+            dialog.set_fixture_data_source("master")  # We'll need to add this method
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                # Get the fixture type matches from the dialog
+                fixture_type_matches = dialog.get_fixture_type_matches()
+                
+                # Update matches in controller
+                result = self.controller.update_master_fixture_matches(fixture_type_matches)
+                
+                if result["success"]:
+                    matched_count = result["matched_fixtures"]
+                    total_count = result["total_fixtures"]
+                    
+                    # Update UI state
+                    self.update_ui_state()
+                    self.mark_project_dirty()
+                    
+                    self.status_bar.showMessage(f"Updated master fixture matches: {matched_count}/{total_count} matched")
+                else:
+                    QMessageBox.critical(self, "Error", f"Failed to update master matches:\n{result['error']}")
+                    
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error in master GDTF matching:\n{str(e)}")
+    
+    def load_master_file(self, file_path: str):
+        """Load an MVR file using the controller for master fixtures."""
+        self.status_bar.showMessage("Loading Master MVR file...")
+        
+        try:
+            result = self.controller.load_master_mvr_file(file_path)
+            
+            if result["success"]:
+                # Update UI
+                self.master_file_label.setText(f"✓ {Path(file_path).name}")
+                self.master_file_label.setStyleSheet("padding: 10px; border: 1px solid #4CAF50; border-radius: 4px; background-color: #E8F5E8; color: #2E7D32; font-weight: bold;")
+                
+                # Store master results
+                self.master_results = result
+                
+                # Update UI state
+                self.update_ui_state()
+                self.mark_project_dirty()
+                
+                self.status_bar.showMessage(f"Loaded {result['total_fixtures']} master fixtures from {Path(file_path).name}")
+                
+            else:
+                QMessageBox.critical(self, "Error", f"Failed to load Master MVR file:\n{result['error']}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading Master file:\n{str(e)}")
+    
+    def browse_remote_file(self):
+        """Open file dialog to select remote MVR or CSV file based on selection."""
+        if self.remote_mvr_radio.isChecked():
+            self.browse_remote_mvr_file()
+        else:
+            self.browse_remote_csv_file()
+    
+    def browse_remote_mvr_file(self):
+        """Open MVR import dialog for remote fixtures."""
+        try:
+            dialog = MVRImportDialog(self, self.config)
+            dialog.setWindowTitle("Remote MVR Import - Select Fixtures")
+            
+            # Connect the import successful signal
+            dialog.import_successful.connect(self.load_remote_csv_fixtures)
+            
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error opening remote MVR import dialog:\n{str(e)}")
+    
+    def browse_remote_csv_file(self):
+        """Open CSV import dialog for remote fixtures."""
+        try:
+            dialog = CSVImportDialog(self, self.config)
+            
+            # Connect the import successful signal
+            dialog.import_successful.connect(self.load_remote_csv_fixtures)
+            
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error opening remote CSV import dialog:\n{str(e)}")
+    
+    def load_remote_file(self, file_path: str):
+        """Load an MVR file using the controller for remote fixtures."""
+        self.status_bar.showMessage("Loading Remote MVR file...")
+        
+        try:
+            result = self.controller.load_remote_mvr_file(file_path)
+            
+            if result["success"]:
+                # Update UI
+                self.remote_file_label.setText(f"✓ {Path(file_path).name}")
+                self.remote_file_label.setStyleSheet("padding: 10px; border: 1px solid #4CAF50; border-radius: 4px; background-color: #E8F5E8; color: #2E7D32; font-weight: bold;")
+                
+                # Store remote results
+                self.remote_results = result
+                
+                # Update UI state
+                self.update_ui_state()
+                self.mark_project_dirty()
+                
+                self.status_bar.showMessage(f"Loaded {result['total_fixtures']} remote fixtures from {Path(file_path).name}")
+                
+            else:
+                QMessageBox.critical(self, "Error", f"Failed to load Remote MVR file:\n{result['error']}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading Remote file:\n{str(e)}")
+    
+    def load_remote_csv_fixtures(self, fixture_matches: List):
+        """Load remote fixtures from CSV import."""
+        try:
+            result = self.controller.load_remote_csv_fixtures(fixture_matches)
+            
+            if result["success"]:
+                # Update UI
+                self.remote_file_label.setText(f"✓ Remote CSV Import ({result['total_fixtures']} fixtures)")
+                self.remote_file_label.setStyleSheet("padding: 10px; border: 1px solid #4CAF50; border-radius: 4px; background-color: #E8F5E8; color: #2E7D32; font-weight: bold;")
+                
+                # Store remote results
+                self.remote_results = result
+                
+                # Update UI state
+                self.update_ui_state()
+                self.mark_project_dirty()
+                
+            else:
+                QMessageBox.critical(self, "Error", f"Error loading remote CSV: {result['error']}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading remote CSV:\n{str(e)}")
+    
+    def match_remote_gdtf_profiles(self):
+        """Open GDTF matching dialog for remote fixtures."""
+        try:
+            # Check if we have remote fixtures loaded
+            if not self.controller.remote_matched_fixtures:
+                QMessageBox.warning(self, "No Remote Fixtures", "Please load remote fixtures first (MVR or CSV).")
+                return
+            
+            # Use existing dialog but set it to work with remote fixtures
+            dialog = GDTFMatchingDialog(self, self.controller, self.config)
+            dialog.set_fixture_data_source("remote")
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                # Get the fixture type matches from the dialog
+                fixture_type_matches = dialog.get_fixture_type_matches()
+                
+                # Update matches in controller
+                result = self.controller.update_remote_fixture_matches(fixture_type_matches)
+                
+                if result["success"]:
+                    matched_count = result["matched_fixtures"]
+                    total_count = result["total_fixtures"]
+                    
+                    # Update UI state
+                    self.update_ui_state()
+                    self.mark_project_dirty()
+                    
+                    self.status_bar.showMessage(f"Updated remote fixture matches: {matched_count}/{total_count} matched")
+                else:
+                    QMessageBox.critical(self, "Error", f"Failed to update remote matches:\n{result['error']}")
+                    
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error in remote GDTF matching:\n{str(e)}")
+    
+    def select_remote_attributes(self):
+        """Select remote attributes for analysis."""
+        try:
+            # Check if remote fixtures are loaded
+            if not hasattr(self, 'remote_fixture_type_attributes'):
+                self.remote_fixture_type_attributes = {}
+                
+            dialog = FixtureAttributeDialog(self, self.controller, self.config, self.remote_fixture_type_attributes, data_source="remote")
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                # Get selected attributes per fixture type
+                self.remote_fixture_type_attributes = dialog.get_fixture_type_attributes()
+                
+                # Validate that we have some attributes selected
+                total_selected = sum(len(attrs) for attrs in self.remote_fixture_type_attributes.values())
+                if total_selected == 0:
+                    QMessageBox.warning(self, "No Attributes", "No attributes were selected for remote fixtures. You can modify your selection anytime.")
+                    self.remote_fixture_type_attributes = {}
+                else:
+                    # Store the attributes in config (for future reference)
+                    self.config.set_fixture_type_attributes(self.remote_fixture_type_attributes)
+                    
+                    # Mark project as dirty
+                    self.mark_project_dirty()
+                
+                # Update UI state after any changes
+                self.update_ui_state()
+                
+                # Trigger automatic analysis for remote fixtures
+                self._trigger_remote_analysis()
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error in remote attribute selection:\n{str(e)}")
+    
+    def create_export_section(self) -> QWidget:
+        """Create the export section at the bottom."""
+        export_group = QGroupBox("Export & Configuration")
+        export_layout = QHBoxLayout(export_group)
+        
+        # Output format selection
+        format_label = QLabel("Output Format:")
+        export_layout.addWidget(format_label)
+        
+        self.format_combo = QComboBox()
+        self.format_combo.addItems(["ma3_xml", "csv", "json"])
+        self.format_combo.setCurrentText("ma3_xml")
+        self.format_combo.currentTextChanged.connect(self.on_format_changed)
+        export_layout.addWidget(self.format_combo)
+        
+        # MA3 XML configuration button
+        self.ma3_config_btn = QPushButton("Configure MA3 XML...")
+        self.ma3_config_btn.clicked.connect(self.configure_ma3_xml)
+        export_layout.addWidget(self.ma3_config_btn)
+        
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        export_layout.addWidget(self.progress_bar)
+        
+        # Export button
+        self.export_btn = QPushButton("Export Results")
+        self.export_btn.clicked.connect(self.export_results)
+        self.export_btn.setEnabled(False)
+        export_layout.addWidget(self.export_btn)
+        
+        export_layout.addStretch()
+        
+        return export_group
+    
+    def create_master_results_section(self) -> QWidget:
+        """Create the master results section."""
+        results_group = QGroupBox("Master Analysis Results")
+        results_layout = QVBoxLayout(results_group)
+        
+        # Results status
+        self.master_results_status = QLabel("Complete steps 1-3 for automatic analysis")
+        self.master_results_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
+        results_layout.addWidget(self.master_results_status)
+        
+        # Results tree
+        self.master_results_tree = QTreeWidget()
+        self.master_results_tree.setHeaderLabels(["Fixture/Attribute", "Type", "GDTF Profile", "Base Address", "Mode", "Universe", "Channel", "Absolute"])
+        self.master_results_tree.setAlternatingRowColors(True)
+        self.master_results_tree.setRootIsDecorated(True)
+        results_layout.addWidget(self.master_results_tree)
+        
+        # Setup initial state
+        self._setup_empty_master_results_tree()
+        
+        return results_group
+    
+    def create_remote_results_section(self) -> QWidget:
+        """Create the remote results section."""
+        results_group = QGroupBox("Remote Analysis Results")
+        results_layout = QVBoxLayout(results_group)
+        
+        # Results status
+        self.remote_results_status = QLabel("Complete steps 1-3 for automatic analysis")
+        self.remote_results_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
+        results_layout.addWidget(self.remote_results_status)
+        
+        # Results tree
+        self.remote_results_tree = QTreeWidget()
+        self.remote_results_tree.setHeaderLabels(["Fixture/Attribute", "Type", "GDTF Profile", "Base Address", "Mode", "Universe", "Channel", "Absolute"])
+        self.remote_results_tree.setAlternatingRowColors(True)
+        self.remote_results_tree.setRootIsDecorated(True)
+        results_layout.addWidget(self.remote_results_tree)
+        
+        # Setup initial state
+        self._setup_empty_remote_results_tree()
+        
+        return results_group
+    
+    def create_alignment_control_section(self) -> QWidget:
+        """Create the routing control section."""
+        control_group = QGroupBox("Routing Controls")
+        control_layout = QVBoxLayout(control_group)
+        
+        # Status label
+        self.alignment_status = QLabel("Load Master and Remote fixtures to begin routing")
+        self.alignment_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
+        control_layout.addWidget(self.alignment_status)
+        
+        # Alignment buttons
+        button_layout = QHBoxLayout()
+        
+        self.align_btn = QPushButton("Auto Route")
+        self.align_btn.setEnabled(False)
+        self.align_btn.setToolTip("Automatically route remote fixtures to master fixtures based on names")
+        self.align_btn.clicked.connect(self.align_fixtures)
+        button_layout.addWidget(self.align_btn)
+        
+        self.pair_btn = QPushButton("Link Selected")
+        self.pair_btn.setEnabled(False)
+        self.pair_btn.setToolTip("Manually link selected master and remote fixtures")
+        self.pair_btn.clicked.connect(self.pair_selected_fixtures)
+        button_layout.addWidget(self.pair_btn)
+        
+        self.unpair_btn = QPushButton("Unlink Selected")
+        self.unpair_btn.setEnabled(False)
+        self.unpair_btn.setToolTip("Remove manual link for selected master fixture")
+        self.unpair_btn.clicked.connect(self.unpair_selected_fixture)
+        button_layout.addWidget(self.unpair_btn)
+        
+        self.clear_alignment_btn = QPushButton("Clear All")
+        self.clear_alignment_btn.setEnabled(False)
+        self.clear_alignment_btn.clicked.connect(self.clear_alignment)
+        button_layout.addWidget(self.clear_alignment_btn)
+        
+        button_layout.addStretch()
+        
+        control_layout.addLayout(button_layout)
+        
+        return control_group
+    
+    def create_alignment_results_section(self) -> QWidget:
+        """Create the routing section with side-by-side tables."""
+        results_group = QGroupBox("Fixture Routing")
+        results_layout = QVBoxLayout(results_group)
+        
+        # Results status
+        self.alignment_results_status = QLabel("Load Master and Remote fixtures to begin routing")
+        self.alignment_results_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
+        results_layout.addWidget(self.alignment_results_status)
+        
+        # Create horizontal layout for side-by-side tables
+        tables_layout = QHBoxLayout()
+        
+        # Master fixtures table
+        master_group = QGroupBox("Master Fixtures")
+        master_layout = QVBoxLayout(master_group)
+        
+        self.master_fixtures_table = DraggableTableWidget()
+        self.master_fixtures_table.setColumnCount(6)
+        self.master_fixtures_table.setHorizontalHeaderLabels(["ID", "Name", "Type", "Mode", "Base Address", "Routing"])
+        self.master_fixtures_table.setAlternatingRowColors(True)
+        self.master_fixtures_table.itemSelectionChanged.connect(self.on_master_selection_changed)
+        master_layout.addWidget(self.master_fixtures_table)
+        
+        # Remote fixtures table
+        remote_group = QGroupBox("Remote Fixtures")
+        remote_layout = QVBoxLayout(remote_group)
+        
+        self.remote_fixtures_table = DraggableTableWidget()
+        self.remote_fixtures_table.setColumnCount(6)
+        self.remote_fixtures_table.setHorizontalHeaderLabels(["ID", "Name", "Type", "Mode", "Base Address", "Routing"])
+        self.remote_fixtures_table.setAlternatingRowColors(True)
+        self.remote_fixtures_table.itemSelectionChanged.connect(self.on_remote_selection_changed)
+        remote_layout.addWidget(self.remote_fixtures_table)
+        
+        # Add equal stretch to both tables
+        tables_layout.addWidget(master_group, 1)
+        tables_layout.addWidget(remote_group, 1)
+        
+        results_layout.addLayout(tables_layout, 1)
+        
+        # Setup initial state
+        self._setup_empty_alignment_tables()
+        
+        return results_group
+    
+    def _setup_empty_master_results_tree(self):
+        """Set up the master results tree in empty state."""
+        self.master_results_tree.clear()
+        
+        # Add a status item
+        status_item = QTreeWidgetItem()
+        status_item.setText(0, "Complete steps 1-3 for automatic analysis")
+        status_item.setForeground(0, QColor("gray"))
+        
+        # Set italic font
+        font = QFont()
+        font.setItalic(True)
+        status_item.setFont(0, font)
+        
+        self.master_results_tree.addTopLevelItem(status_item)
+        
+        # Resize to fit content
+        self.master_results_tree.resizeColumnToContents(0)
+    
+    def _setup_empty_remote_results_tree(self):
+        """Set up the remote results tree in empty state."""
+        self.remote_results_tree.clear()
+        
+        # Add a status item
+        status_item = QTreeWidgetItem()
+        status_item.setText(0, "Complete steps 1-3 for automatic analysis")
+        status_item.setForeground(0, QColor("gray"))
+        
+        # Set italic font
+        font = QFont()
+        font.setItalic(True)
+        status_item.setFont(0, font)
+        
+        self.remote_results_tree.addTopLevelItem(status_item)
+        
+        # Resize to fit content
+        self.remote_results_tree.resizeColumnToContents(0)
+    
+    def _setup_empty_alignment_tables(self):
+        """Set up the alignment tables in empty state."""
+        self.master_fixtures_table.setRowCount(0)
+        self.remote_fixtures_table.setRowCount(0)
+        
+        # Resize columns to fit content
+        self.master_fixtures_table.resizeColumnsToContents()
+        self.remote_fixtures_table.resizeColumnsToContents()
+    
+    def align_fixtures(self):
+        """Perform automatic fixture alignment between master and remote fixtures."""
+        try:
+            self.status_bar.showMessage("Auto-aligning fixtures...")
+            
+            # Show alignment configuration dialog or use defaults
+            alignment_config = {
+                "match_threshold": 0.8,
+                "case_sensitive": False,
+                "allow_partial_matches": True,
+                "prioritize_exact_matches": True
+            }
+            
+            result = self.controller.align_fixtures(alignment_config)
+            
+            if result["success"]:
+                # Clear any existing manual alignments and set mode to automatic
+                self.controller.manual_alignments = {}
+                self.controller.alignment_mode = "automatic"
+                
+                # Update alignment tables
+                self._populate_alignment_tables()
+                
+                # Update alignment status
+                matched_count = result["matched_count"]
+                total_master = len(self.controller.master_matched_fixtures)
+                alignment_percentage = result["alignment_percentage"]
+                
+                self.alignment_status.setText(
+                    f"✓ Auto-alignment complete: {matched_count}/{total_master} fixtures matched ({alignment_percentage:.1f}%)"
+                )
+                self.alignment_status.setStyleSheet("color: green; font-weight: bold; padding: 10px;")
+                
+                # Enable clear button
+                self.clear_alignment_btn.setEnabled(True)
+                
+                # Mark project as dirty
+                self.mark_project_dirty()
+                
+                self.status_bar.showMessage(f"Auto-alignment complete: {matched_count} fixtures matched")
+                
+            else:
+                QMessageBox.critical(self, "Alignment Error", f"Failed to align fixtures:\n{result['error']}")
+                self.status_bar.showMessage("Alignment failed")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error during alignment:\n{str(e)}")
+            self.status_bar.showMessage("Alignment error")
+    
+    def clear_alignment(self):
+        """Clear current alignment results."""
+        try:
+            self.controller.clear_alignment_results()
+            
+            # Refresh the tables
+            self._populate_alignment_tables()
+            
+            # Reset alignment status
+            self.alignment_status.setText("Load Master and Remote fixtures to begin alignment")
+            self.alignment_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
+            
+            # Disable clear button
+            self.clear_alignment_btn.setEnabled(False)
+            
+            # Mark project as dirty
+            self.mark_project_dirty()
+            
+            self.status_bar.showMessage("Alignment results cleared")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error clearing alignment:\n{str(e)}")
+    
+    def on_master_selection_changed(self):
+        """Handle master table selection changes."""
+        self._update_manual_alignment_buttons()
+    
+    def on_remote_selection_changed(self):
+        """Handle remote table selection changes."""
+        self._update_manual_alignment_buttons()
+    
+    def pair_selected_fixtures(self):
+        """Pair selected master and remote fixtures."""
+        try:
+            # Get selected rows
+            master_row = self._get_selected_master_row()
+            remote_row = self._get_selected_remote_row()
+            
+            if master_row is None or remote_row is None:
+                QMessageBox.warning(self, "Selection Required", "Please select both a master and remote fixture to pair.")
+                return
+            
+            # Get fixture IDs
+            master_id = self.master_fixtures_table.item(master_row, 0).text()
+            remote_id = self.remote_fixtures_table.item(remote_row, 0).text()
+            
+            # Set manual alignment
+            self.controller.set_manual_alignment(master_id, remote_id)
+            
+            # Refresh the tables
+            self._populate_alignment_tables()
+            
+            # Update status
+            self._update_alignment_status()
+            
+            # Mark project as dirty
+            self.mark_project_dirty()
+            
+            self.status_bar.showMessage(f"Paired master fixture {master_id} with remote fixture {remote_id}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error pairing fixtures:\n{str(e)}")
+            self.status_bar.showMessage("Error pairing fixtures")
+    
+    def unpair_selected_fixture(self):
+        """Remove manual pairing for selected master fixture."""
+        try:
+            # Get selected master row
+            master_row = self._get_selected_master_row()
+            
+            if master_row is None:
+                QMessageBox.warning(self, "Selection Required", "Please select a master fixture to unpair.")
+                return
+            
+            # Get fixture ID
+            master_id = self.master_fixtures_table.item(master_row, 0).text()
+            
+            # Remove manual alignment
+            self.controller.remove_manual_alignment(master_id)
+            
+            # Refresh the tables
+            self._populate_alignment_tables()
+            
+            # Update status
+            self._update_alignment_status()
+            
+            # Mark project as dirty
+            self.mark_project_dirty()
+            
+            self.status_bar.showMessage(f"Unpaired master fixture {master_id}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error unpairing fixture:\n{str(e)}")
+            self.status_bar.showMessage("Error unpairing fixture")
+    
+    def _get_selected_master_row(self) -> Optional[int]:
+        """Get the selected row in the master table."""
+        selection = self.master_fixtures_table.selectionModel().selectedRows()
+        if selection:
+            return selection[0].row()
+        return None
+    
+    def _get_selected_remote_row(self) -> Optional[int]:
+        """Get the selected row in the remote table."""
+        selection = self.remote_fixtures_table.selectionModel().selectedRows()
+        if selection:
+            return selection[0].row()
+        return None
+    
+    def _update_manual_alignment_buttons(self):
+        """Update the state of manual alignment buttons."""
+        has_master = self._get_selected_master_row() is not None
+        has_remote = self._get_selected_remote_row() is not None
+        
+        self.pair_btn.setEnabled(has_master and has_remote)
+        self.unpair_btn.setEnabled(has_master)
+    
+    def _populate_alignment_tables(self):
+        """Populate the master and remote fixture tables."""
+        try:
+            # Clear existing data
+            self.master_fixtures_table.setRowCount(0)
+            self.remote_fixtures_table.setRowCount(0)
+            
+            # Get manual alignments
+            manual_alignments = self.controller.get_manual_alignments()
+            
+            # Populate master fixtures table
+            master_fixtures = self.controller.master_matched_fixtures
+            if master_fixtures:
+                self.master_fixtures_table.setRowCount(len(master_fixtures))
+                for row, fixture in enumerate(master_fixtures):
+                    # Create editable items
+                    id_item = QTableWidgetItem(str(fixture.fixture_id))
+                    name_item = QTableWidgetItem(fixture.name)
+                    type_item = QTableWidgetItem(fixture.gdtf_spec or "Unknown")
+                    mode_item = QTableWidgetItem(fixture.gdtf_mode or "")
+                    address_item = QTableWidgetItem(str(fixture.base_address))
+                    
+                    # Show routing status (read-only for now)
+                    routing_status = ""
+                    if fixture.fixture_id in manual_alignments:
+                        remote_id = manual_alignments[fixture.fixture_id]
+                        routing_status = f"→ {remote_id}"
+                    routing_item = QTableWidgetItem(routing_status)
+                    routing_item.setFlags(routing_item.flags() & ~Qt.ItemFlag.ItemIsEditable)  # Make read-only
+                    
+                    # Set items in table
+                    self.master_fixtures_table.setItem(row, 0, id_item)
+                    self.master_fixtures_table.setItem(row, 1, name_item)
+                    self.master_fixtures_table.setItem(row, 2, type_item)
+                    self.master_fixtures_table.setItem(row, 3, mode_item)
+                    self.master_fixtures_table.setItem(row, 4, address_item)
+                    self.master_fixtures_table.setItem(row, 5, routing_item)
+            
+            # Populate remote fixtures table
+            remote_fixtures = self.controller.remote_matched_fixtures
+            if remote_fixtures:
+                self.remote_fixtures_table.setRowCount(len(remote_fixtures))
+                for row, fixture in enumerate(remote_fixtures):
+                    # Create editable items
+                    id_item = QTableWidgetItem(str(fixture.fixture_id))
+                    name_item = QTableWidgetItem(fixture.name)
+                    type_item = QTableWidgetItem(fixture.gdtf_spec or "Unknown")
+                    mode_item = QTableWidgetItem(fixture.gdtf_mode or "")
+                    address_item = QTableWidgetItem(str(fixture.base_address))
+                    
+                    # Show routing status (read-only for now)
+                    routing_status = ""
+                    # Check if this remote fixture is linked with any master
+                    for master_id, remote_id in manual_alignments.items():
+                        if remote_id == fixture.fixture_id:
+                            routing_status = f"← {master_id}"
+                            break
+                    routing_item = QTableWidgetItem(routing_status)
+                    routing_item.setFlags(routing_item.flags() & ~Qt.ItemFlag.ItemIsEditable)  # Make read-only
+                    
+                    # Set items in table
+                    self.remote_fixtures_table.setItem(row, 0, id_item)
+                    self.remote_fixtures_table.setItem(row, 1, name_item)
+                    self.remote_fixtures_table.setItem(row, 2, type_item)
+                    self.remote_fixtures_table.setItem(row, 3, mode_item)
+                    self.remote_fixtures_table.setItem(row, 4, address_item)
+                    self.remote_fixtures_table.setItem(row, 5, routing_item)
+            
+            # Resize columns to fit content
+            self.master_fixtures_table.resizeColumnsToContents()
+            self.remote_fixtures_table.resizeColumnsToContents()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error populating alignment tables:\n{str(e)}")
+    
+    def _update_alignment_status(self):
+        """Update the alignment status label."""
+        try:
+            manual_alignments = self.controller.get_manual_alignments()
+            alignment_count = len(manual_alignments)
+            
+            if alignment_count > 0:
+                self.alignment_status.setText(f"✓ {alignment_count} manual routing(s) set")
+                self.alignment_status.setStyleSheet("color: green; font-weight: bold; padding: 10px;")
+                self.clear_alignment_btn.setEnabled(True)
+            else:
+                self.alignment_status.setText("Load Master and Remote fixtures to begin routing")
+                self.alignment_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
+                self.clear_alignment_btn.setEnabled(False)
+                
+        except Exception as e:
+            self.alignment_status.setText(f"Error updating status: {str(e)}")
+            self.alignment_status.setStyleSheet("color: red; padding: 10px;")
+    
+    def on_row_moved(self, from_index, to_index):
+        """Handle when a row is moved via drag and drop."""
+        # Mark that the routing has been modified
+        self.mark_project_dirty()
+        self.status_bar.showMessage(f"Row moved from {from_index} to {to_index}")
+    
+    def on_row_inserted(self, row_index):
+        """Handle when an empty row is inserted."""
+        self.status_bar.showMessage(f"Empty row inserted at position {row_index}")
+        # Mark that the routing has been modified
+        self.mark_project_dirty()
+    
+    def on_row_deleted(self, row_index):
+        """Handle when a row is deleted."""
+        self.status_bar.showMessage(f"Row deleted at position {row_index}")
+        # Mark that the routing has been modified
+        self.mark_project_dirty()
+    
+    def add_master_row(self):
+        """Add an empty row to the master fixtures table."""
+        row_count = self.master_fixtures_table.rowCount()
+        self.master_fixtures_table.insertRow(row_count)
+        
+        # Set default values for empty row
+        self.master_fixtures_table.setItem(row_count, 0, QTableWidgetItem(""))  # ID
+        self.master_fixtures_table.setItem(row_count, 1, QTableWidgetItem(""))  # Name
+        self.master_fixtures_table.setItem(row_count, 2, QTableWidgetItem(""))  # Type
+        self.master_fixtures_table.setItem(row_count, 3, QTableWidgetItem(""))  # Mode
+        self.master_fixtures_table.setItem(row_count, 4, QTableWidgetItem(""))  # Base Address
+        
+        # Set routing column as read-only
+        routing_item = QTableWidgetItem("")
+        routing_item.setFlags(routing_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.master_fixtures_table.setItem(row_count, 5, routing_item)
+        
+        # Select the new row
+        self.master_fixtures_table.selectRow(row_count)
+        
+        self.status_bar.showMessage("Empty master row added")
+        self.mark_project_dirty()
+    
+    def add_remote_row(self):
+        """Add an empty row to the remote fixtures table."""
+        row_count = self.remote_fixtures_table.rowCount()
+        self.remote_fixtures_table.insertRow(row_count)
+        
+        # Set default values for empty row
+        self.remote_fixtures_table.setItem(row_count, 0, QTableWidgetItem(""))  # ID
+        self.remote_fixtures_table.setItem(row_count, 1, QTableWidgetItem(""))  # Name
+        self.remote_fixtures_table.setItem(row_count, 2, QTableWidgetItem(""))  # Type
+        self.remote_fixtures_table.setItem(row_count, 3, QTableWidgetItem(""))  # Mode
+        self.remote_fixtures_table.setItem(row_count, 4, QTableWidgetItem(""))  # Base Address
+        
+        # Set routing column as read-only
+        routing_item = QTableWidgetItem("")
+        routing_item.setFlags(routing_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.remote_fixtures_table.setItem(row_count, 5, routing_item)
+        
+        # Select the new row
+        self.remote_fixtures_table.selectRow(row_count)
+        
+        self.status_bar.showMessage("Empty remote row added")
+        self.mark_project_dirty()
+    
+    def _populate_alignment_results_tree(self, alignment_result: dict):
+        """Populate the alignment results tree with alignment data."""
+        if not alignment_result or not alignment_result.get("success"):
+            self._show_error_in_alignment_tree("Alignment failed")
+            return
+        
+        alignment_results = alignment_result.get("alignment_results", [])
+        if not alignment_results:
+            self._show_error_in_alignment_tree("No alignment results to display")
+            return
+        
+        # Clear the tree
+        self.alignment_results_tree.clear()
+        
+        # Sort results by alignment status and confidence
+        sorted_results = sorted(
+            alignment_results, 
+            key=lambda x: (
+                0 if x["alignment_status"] == "matched" else 
+                1 if x["alignment_status"] == "unmatched" else 2,
+                -x["confidence"]
+            )
+        )
+        
+        for result in sorted_results:
+            # Create alignment item
+            alignment_item = QTreeWidgetItem()
+            
+            # Master fixture info
+            if result["master_fixture"]:
+                master_name = result["master_fixture"].name
+                master_type = getattr(result["master_fixture"], 'gdtf_spec', 'Unknown') or 'Unknown'
+            else:
+                master_name = "—"
+                master_type = "—"
+            
+            # Remote fixture info
+            if result["remote_fixture"]:
+                remote_name = result["remote_fixture"].name
+                remote_type = getattr(result["remote_fixture"], 'gdtf_spec', 'Unknown') or 'Unknown'
+            else:
+                remote_name = "—"
+                remote_type = "—"
+            
+            # Set alignment item data
+            alignment_item.setText(0, master_name)
+            alignment_item.setText(1, remote_name)
+            alignment_item.setText(2, result["alignment_status"].replace("_", " ").title())
+            alignment_item.setText(3, f"{result['confidence']:.2%}")
+            alignment_item.setText(4, result["notes"])
+            
+            # Set styling based on alignment status
+            if result["alignment_status"] == "matched":
+                alignment_item.setForeground(0, QColor("darkgreen"))
+                alignment_item.setForeground(1, QColor("darkgreen"))
+                alignment_item.setForeground(2, QColor("darkgreen"))
+            elif result["alignment_status"] == "unmatched":
+                alignment_item.setForeground(0, QColor("orange"))
+                alignment_item.setForeground(2, QColor("orange"))
+            else:  # unmatched_remote
+                alignment_item.setForeground(1, QColor("red"))
+                alignment_item.setForeground(2, QColor("red"))
+            
+            # Add to tree
+            self.alignment_results_tree.addTopLevelItem(alignment_item)
+        
+        # Resize columns to fit content
+        for i in range(self.alignment_results_tree.columnCount()):
+            self.alignment_results_tree.resizeColumnToContents(i)
+    
+    def _show_error_in_alignment_tree(self, error_message: str):
+        """Show an error message in the alignment tree."""
+        self.alignment_results_tree.clear()
+        
+        error_item = QTreeWidgetItem()
+        error_item.setText(0, error_message)
+        error_item.setForeground(0, QColor("red"))
+        
+        # Set bold font
+        font = QFont()
+        font.setBold(True)
+        error_item.setFont(0, font)
+        
+        self.alignment_results_tree.addTopLevelItem(error_item)
+        
+        # Resize to fit content
+        self.alignment_results_tree.resizeColumnToContents(0)
+    
+    def _populate_master_results_tree(self, analysis_results: dict):
+        """Populate the master results tree with hierarchical analysis data."""
+        if not analysis_results or not analysis_results.get("success"):
+            self._show_error_in_master_tree("Master analysis failed")
+            return
+        
+        results = analysis_results.get("analysis_results")
+        if not results:
+            self._show_error_in_master_tree("No master analysis results")
+            return
+        
+        fixtures = results.fixtures
+        if not fixtures:
+            self._show_error_in_master_tree("No master fixtures to display")
+            return
+        
+        # Clear the tree
+        self.master_results_tree.clear()
+        
+        # Sort fixtures by fixture_id
+        sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], key=lambda x: x.fixture_id)
+        
+        for fixture in sorted_fixtures:
+            # Create fixture parent item
+            fixture_type = fixture.gdtf_spec or "Unknown"
+            if fixture_type.endswith('.gdtf'):
+                fixture_type = fixture_type[:-5]
+            
+            # Get fixture type to determine which attributes to show
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            fixture_attributes = self.master_fixture_type_attributes.get(fixture_type_clean, [])
+            
+            # Create fixture item with summary info
+            fixture_item = QTreeWidgetItem()
+            fixture_item.setText(0, f"Master Fixture {fixture.fixture_id}: {fixture.name}")
+            fixture_item.setText(1, "FIXTURE")
+            fixture_item.setText(2, fixture_type)
+            fixture_item.setText(3, str(fixture.base_address))
+            fixture_item.setText(4, fixture.gdtf_mode or "")
+            
+            # Set fixture item styling
+            font = QFont()
+            font.setBold(True)
+            fixture_item.setFont(0, font)
+            fixture_item.setForeground(0, QColor("darkblue"))
+            
+            # Add attribute child items
+            if hasattr(fixture, 'absolute_addresses') and fixture.absolute_addresses:
+                for attr_name in fixture_attributes:
+                    if attr_name in fixture.absolute_addresses:
+                        addr_info = fixture.absolute_addresses[attr_name]
+                        universe = addr_info.get("universe", "?")
+                        channel = addr_info.get("channel", "?")
+                        absolute_address = addr_info.get("absolute_address", "?")
+                        
+                        attr_item = QTreeWidgetItem()
+                        attr_item.setText(0, f"  └─ {attr_name}")
+                        attr_item.setText(1, "ATTRIBUTE")
+                        attr_item.setText(2, "—")
+                        attr_item.setText(3, "—")
+                        attr_item.setText(4, "—")
+                        attr_item.setText(5, str(universe))
+                        attr_item.setText(6, str(channel))
+                        attr_item.setText(7, str(absolute_address))
+                        
+                        fixture_item.addChild(attr_item)
+            
+            # If no attributes, add a placeholder
+            if fixture_item.childCount() == 0:
+                no_attr_item = QTreeWidgetItem()
+                no_attr_item.setText(0, "No attributes selected")
+                no_attr_item.setForeground(0, QColor("gray"))
+                
+                font = QFont()
+                font.setItalic(True)
+                no_attr_item.setFont(0, font)
+                
+                fixture_item.addChild(no_attr_item)
+            
+            # Add fixture to tree
+            self.master_results_tree.addTopLevelItem(fixture_item)
+            
+            # Expand the fixture to show attributes
+            fixture_item.setExpanded(True)
+        
+        # Resize columns to fit content
+        for i in range(self.master_results_tree.columnCount()):
+            self.master_results_tree.resizeColumnToContents(i)
+    
+    def _populate_remote_results_tree(self, analysis_results: dict):
+        """Populate the remote results tree with hierarchical analysis data."""
+        if not analysis_results or not analysis_results.get("success"):
+            self._show_error_in_remote_tree("Remote analysis failed")
+            return
+        
+        results = analysis_results.get("analysis_results")
+        if not results:
+            self._show_error_in_remote_tree("No remote analysis results")
+            return
+        
+        fixtures = results.fixtures
+        if not fixtures:
+            self._show_error_in_remote_tree("No remote fixtures to display")
+            return
+        
+        # Clear the tree
+        self.remote_results_tree.clear()
+        
+        # Sort fixtures by fixture_id
+        sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], key=lambda x: x.fixture_id)
+        
+        for fixture in sorted_fixtures:
+            # Create fixture parent item
+            fixture_type = fixture.gdtf_spec or "Unknown"
+            if fixture_type.endswith('.gdtf'):
+                fixture_type = fixture_type[:-5]
+            
+            # Get fixture type to determine which attributes to show
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            fixture_attributes = self.remote_fixture_type_attributes.get(fixture_type_clean, [])
+            
+            # Create fixture item with summary info
+            fixture_item = QTreeWidgetItem()
+            fixture_item.setText(0, f"Remote Fixture {fixture.fixture_id}: {fixture.name}")
+            fixture_item.setText(1, "FIXTURE")
+            fixture_item.setText(2, fixture_type)
+            fixture_item.setText(3, str(fixture.base_address))
+            fixture_item.setText(4, fixture.gdtf_mode or "")
+            
+            # Set fixture item styling
+            font = QFont()
+            font.setBold(True)
+            fixture_item.setFont(0, font)
+            fixture_item.setForeground(0, QColor("darkorange"))
+            
+            # Add attribute child items
+            if hasattr(fixture, 'absolute_addresses') and fixture.absolute_addresses:
+                for attr_name in fixture_attributes:
+                    if attr_name in fixture.absolute_addresses:
+                        addr_info = fixture.absolute_addresses[attr_name]
+                        universe = addr_info.get("universe", "?")
+                        channel = addr_info.get("channel", "?")
+                        absolute_address = addr_info.get("absolute_address", "?")
+                        
+                        attr_item = QTreeWidgetItem()
+                        attr_item.setText(0, f"  └─ {attr_name}")
+                        attr_item.setText(1, "ATTRIBUTE")
+                        attr_item.setText(2, "—")
+                        attr_item.setText(3, "—")
+                        attr_item.setText(4, "—")
+                        attr_item.setText(5, str(universe))
+                        attr_item.setText(6, str(channel))
+                        attr_item.setText(7, str(absolute_address))
+                        
+                        fixture_item.addChild(attr_item)
+            
+            # If no attributes, add a placeholder
+            if fixture_item.childCount() == 0:
+                no_attr_item = QTreeWidgetItem()
+                no_attr_item.setText(0, "No attributes selected")
+                no_attr_item.setForeground(0, QColor("gray"))
+                
+                font = QFont()
+                font.setItalic(True)
+                no_attr_item.setFont(0, font)
+                
+                fixture_item.addChild(no_attr_item)
+            
+            # Add fixture to tree
+            self.remote_results_tree.addTopLevelItem(fixture_item)
+            
+            # Expand the fixture to show attributes
+            fixture_item.setExpanded(True)
+        
+        # Resize columns to fit content
+        for i in range(self.remote_results_tree.columnCount()):
+            self.remote_results_tree.resizeColumnToContents(i)
+    
+    def _show_error_in_master_tree(self, error_message: str):
+        """Show an error message in the master results tree."""
+        self.master_results_tree.clear()
+        
+        error_item = QTreeWidgetItem()
+        error_item.setText(0, error_message)
+        error_item.setForeground(0, QColor("red"))
+        
+        # Set bold font
+        font = QFont()
+        font.setBold(True)
+        error_item.setFont(0, font)
+        
+        self.master_results_tree.addTopLevelItem(error_item)
+        
+        # Resize to fit content
+        self.master_results_tree.resizeColumnToContents(0)
+    
+    def _show_error_in_remote_tree(self, error_message: str):
+        """Show an error message in the remote results tree."""
+        self.remote_results_tree.clear()
+        
+        error_item = QTreeWidgetItem()
+        error_item.setText(0, error_message)
+        error_item.setForeground(0, QColor("red"))
+        
+        # Set bold font
+        font = QFont()
+        font.setBold(True)
+        error_item.setFont(0, font)
+        
+        self.remote_results_tree.addTopLevelItem(error_item)
+        
+        # Resize to fit content
+        self.remote_results_tree.resizeColumnToContents(0)
     
     def update_progress(self, message: str):
         """Update progress message."""
         self.status_bar.showMessage(message)
     
     def analysis_complete(self, result: dict):
-        """Handle successful analysis completion."""
-        self.worker = None
-        self.progress_bar.setVisible(False)
+        """Legacy method - analysis is now handled per tab."""
+        pass
+    
+    def analysis_error(self, error: str):
+        """Legacy method - analysis is now handled per tab.""" 
+        pass
+    
+    def master_analysis_complete(self, result: dict):
+        """Handle successful master analysis completion."""
+        self.master_worker = None
         
         # Store results
-        self.current_results = result
+        self.master_results = result
         
         # Update UI
-        self._populate_results_tree(result)
-        self.export_btn.setEnabled(True)
-        
-        # Update results status
-        self._update_results_status()
-        
-        # Update UI state (this will re-enable buttons appropriately)
-        self.update_ui_state()
+        self._populate_master_results_tree(result)
         
         # Show summary
         summary = result.get("summary", {})
@@ -808,29 +2743,77 @@ class MVRApp(QMainWindow):
         matched_fixtures = summary.get("matched_fixtures", 0)
         conflicts = len(summary.get("conflicts", []))
         
-        status_msg = f"Analysis complete: {matched_fixtures}/{total_fixtures} fixtures analyzed"
+        status_msg = f"Master analysis complete: {matched_fixtures}/{total_fixtures} fixtures analyzed"
         if conflicts > 0:
-            status_msg += f", {conflicts} address conflicts found"
+            status_msg += f", {conflicts} conflicts"
         
         self.status_bar.showMessage(status_msg)
+        
+        # Update UI state
+        self.update_ui_state()
     
-    def analysis_error(self, error: str):
-        """Handle analysis error."""
-        self.worker = None
-        self.progress_bar.setVisible(False)
+    def master_analysis_error(self, error: str):
+        """Handle master analysis error."""
+        self.master_worker = None
+        
+        # Clear results
+        self.master_results = None
         
         # Show error in tree
-        self._show_error_in_tree(f"Analysis failed: {error}")
+        self._show_error_in_master_tree(f"Master analysis error: {error}")
         
-        # Update results status
-        self.results_status.setText("Analysis failed")
-        self.results_status.setStyleSheet("color: red; font-weight: bold; padding: 10px;")
+        # Update status
+        self.status_bar.showMessage("Master analysis failed")
         
-        # Update UI state (this will re-enable buttons appropriately)
+        # Show error dialog
+        QMessageBox.critical(self, "Master Analysis Error", f"Failed to analyze master fixtures:\n{error}")
+        
+        # Update UI state
         self.update_ui_state()
+    
+    def remote_analysis_complete(self, result: dict):
+        """Handle successful remote analysis completion."""
+        self.remote_worker = None
         
-        QMessageBox.critical(self, "Analysis Error", f"Analysis failed:\n{error}")
-        self.status_bar.showMessage("Analysis failed")
+        # Store results
+        self.remote_results = result
+        
+        # Update UI
+        self._populate_remote_results_tree(result)
+        
+        # Show summary
+        summary = result.get("summary", {})
+        total_fixtures = summary.get("total_fixtures", 0)
+        matched_fixtures = summary.get("matched_fixtures", 0)
+        conflicts = len(summary.get("conflicts", []))
+        
+        status_msg = f"Remote analysis complete: {matched_fixtures}/{total_fixtures} fixtures analyzed"
+        if conflicts > 0:
+            status_msg += f", {conflicts} conflicts"
+        
+        self.status_bar.showMessage(status_msg)
+        
+        # Update UI state
+        self.update_ui_state()
+    
+    def remote_analysis_error(self, error: str):
+        """Handle remote analysis error."""
+        self.remote_worker = None
+        
+        # Clear results
+        self.remote_results = None
+        
+        # Show error in tree
+        self._show_error_in_remote_tree(f"Remote analysis error: {error}")
+        
+        # Update status
+        self.status_bar.showMessage("Remote analysis failed")
+        
+        # Show error dialog
+        QMessageBox.critical(self, "Remote Analysis Error", f"Failed to analyze remote fixtures:\n{error}")
+        
+        # Update UI state
+        self.update_ui_state()
     
     def on_format_changed(self, format_name: str):
         """Handle output format change."""
@@ -927,6 +2910,16 @@ class MVRApp(QMainWindow):
         self.ma3_config = None
         self.current_results = None
         
+        # Reset master/remote state
+        self.master_fixture_type_attributes = {}
+        self.remote_fixture_type_attributes = {}
+        self.master_results = None
+        self.remote_results = None
+        
+        # Reset project timestamps
+        if hasattr(self, 'project_created_timestamp'):
+            delattr(self, 'project_created_timestamp')
+        
         # Reset controller state
         self.controller = MVRController()
         
@@ -1009,50 +3002,133 @@ class MVRApp(QMainWindow):
             with open(file_path, 'r') as f:
                 project_data = json.load(f)
             
-            # Validate project data
-            if project_data.get('version') != '1.0':
-                QMessageBox.warning(self, "Invalid Project", "This project file format is not supported.")
+            # Validate project data version
+            version = project_data.get('version', '1.0')
+            if version not in ['1.0', '2.0']:
+                QMessageBox.warning(self, "Invalid Project", f"This project file format (version {version}) is not supported.")
                 return
             
-            # Load MVR file if specified
-            mvr_loaded = False
-            if project_data.get('mvr_file_path'):
-                mvr_path = project_data['mvr_file_path']
-                if os.path.exists(mvr_path):
-                    self.load_mvr_file(mvr_path)
-                    mvr_loaded = True
-                else:
-                    reply = QMessageBox.question(
-                        self, "MVR File Not Found",
-                        f"The MVR file '{mvr_path}' was not found. Do you want to locate it?",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            # Load external GDTF profiles first if specified
+            external_gdtf_folder = project_data.get('external_gdtf_folder')
+            if external_gdtf_folder:
+                resolved_gdtf_folder = self._resolve_path_from_project(external_gdtf_folder, file_path)
+                if resolved_gdtf_folder and os.path.exists(resolved_gdtf_folder):
+                    self._load_external_gdtf_profiles(resolved_gdtf_folder)
+                elif resolved_gdtf_folder:  # Path specified but folder doesn't exist
+                    # For missing GDTF folder, just show a warning but continue loading
+                    QMessageBox.warning(
+                        self, "GDTF Folder Not Found",
+                        f"The external GDTF folder was not found at:\n{resolved_gdtf_folder}\n\nYou can set it again in the GDTF settings."
                     )
-                    
-                    if reply == QMessageBox.StandardButton.Yes:
-                        new_mvr_path, _ = QFileDialog.getOpenFileName(
-                            self, "Locate MVR File", "", "MVR Files (*.mvr);;All Files (*)"
-                        )
+            
+            # Handle version 2.0 project files with master/remote data
+            if version == '2.0':
+                # Load master file if specified
+                master_loaded = False
+                if project_data.get('master_file_path'):
+                    master_path = self._resolve_path_from_project(project_data['master_file_path'], file_path)
+                    if master_path and os.path.exists(master_path):
+                        self.load_master_file(master_path)
+                        master_loaded = True
+                    elif master_path:  # Path specified but file doesn't exist
+                        file_types = "MVR Files (*.mvr);;CSV Files (*.csv);;All Files (*)"
+                        new_master_path = self._prompt_for_missing_file("Master File", master_path, file_types)
+                        if new_master_path:
+                            self.load_master_file(new_master_path)
+                            master_loaded = True
+                            # Update controller path to new location
+                            self.controller.master_file_path = new_master_path
+                            self.mark_project_dirty()  # Mark as dirty since path changed
+                
+                # Apply master fixture type matches
+                if master_loaded:
+                    master_fixture_type_matches = project_data.get('master_fixture_type_matches')
+                    if master_fixture_type_matches:
+                        result = self.controller.update_master_fixture_matches(master_fixture_type_matches)
+                        if not result["success"]:
+                            self.status_bar.showMessage("Warning: Could not restore all master fixture matches")
+                
+                # Load remote file if specified
+                remote_loaded = False
+                if project_data.get('remote_file_path'):
+                    remote_path = self._resolve_path_from_project(project_data['remote_file_path'], file_path)
+                    if remote_path and os.path.exists(remote_path):
+                        self.load_remote_file(remote_path)
+                        remote_loaded = True
+                    elif remote_path:  # Path specified but file doesn't exist
+                        file_types = "MVR Files (*.mvr);;CSV Files (*.csv);;All Files (*)"
+                        new_remote_path = self._prompt_for_missing_file("Remote File", remote_path, file_types)
+                        if new_remote_path:
+                            self.load_remote_file(new_remote_path)
+                            remote_loaded = True
+                            # Update controller path to new location
+                            self.controller.remote_file_path = new_remote_path
+                            self.mark_project_dirty()  # Mark as dirty since path changed
+                
+                # Apply remote fixture type matches
+                if remote_loaded:
+                    remote_fixture_type_matches = project_data.get('remote_fixture_type_matches')
+                    if remote_fixture_type_matches:
+                        result = self.controller.update_remote_fixture_matches(remote_fixture_type_matches)
+                        if not result["success"]:
+                            self.status_bar.showMessage("Warning: Could not restore all remote fixture matches")
+                
+                # Restore master and remote fixture type attributes
+                self.master_fixture_type_attributes = project_data.get('master_fixture_type_attributes', {})
+                self.remote_fixture_type_attributes = project_data.get('remote_fixture_type_attributes', {})
+                
+                # Restore alignment data
+                self.controller.alignment_results = project_data.get('alignment_results')
+                self.controller.manual_alignments = project_data.get('manual_alignments', {})
+                self.controller.alignment_mode = project_data.get('alignment_mode', 'automatic')
+                
+                # Restore UI state
+                if 'current_tab_index' in project_data:
+                    self.tab_widget.setCurrentIndex(project_data['current_tab_index'])
+                
+                # Restore window geometry
+                window_geometry = project_data.get('window_geometry')
+                if window_geometry:
+                    self.setGeometry(
+                        window_geometry['x'],
+                        window_geometry['y'],
+                        window_geometry['width'],
+                        window_geometry['height']
+                    )
+                
+                # Restore project timestamps
+                self.project_created_timestamp = project_data.get('created_timestamp')
+                
+            else:
+                # Handle version 1.0 project files (backward compatibility)
+                # Load MVR file if specified
+                mvr_loaded = False
+                if project_data.get('mvr_file_path'):
+                    mvr_path = self._resolve_path_from_project(project_data['mvr_file_path'], file_path)
+                    if mvr_path and os.path.exists(mvr_path):
+                        self.load_mvr_file(mvr_path)
+                        mvr_loaded = True
+                    elif mvr_path:  # Path specified but file doesn't exist
+                        file_types = "MVR Files (*.mvr);;All Files (*)"
+                        new_mvr_path = self._prompt_for_missing_file("MVR File", mvr_path, file_types)
                         if new_mvr_path:
                             self.load_mvr_file(new_mvr_path)
                             mvr_loaded = True
-            
-            # Load external GDTF profiles and apply matches if MVR was loaded
-            if mvr_loaded:
-                # Load external GDTF profiles first
-                external_gdtf_folder = project_data.get('external_gdtf_folder')
-                if external_gdtf_folder:
-                    self._load_external_gdtf_profiles(external_gdtf_folder)
+                            # Update controller path to new location
+                            self.controller.current_file_path = new_mvr_path
+                            self.mark_project_dirty()  # Mark as dirty since path changed
                 
-                # Apply saved fixture type matches
-                fixture_type_matches = project_data.get('fixture_type_matches')
-                if fixture_type_matches:
-                    result = self.controller.update_fixture_matches(fixture_type_matches)
-                    if result["success"]:
-                        self._update_gdtf_status(result["matched_fixtures"], result["total_fixtures"])
-                    else:
-                        self.status_bar.showMessage("Warning: Could not restore all fixture matches")
+                # Apply saved fixture type matches for version 1.0
+                if mvr_loaded:
+                    fixture_type_matches = project_data.get('fixture_type_matches')
+                    if fixture_type_matches:
+                        result = self.controller.update_fixture_matches(fixture_type_matches)
+                        if result["success"]:
+                            self._update_gdtf_status(result["matched_fixtures"], result["total_fixtures"])
+                        else:
+                            self.status_bar.showMessage("Warning: Could not restore all fixture matches")
             
-            # Restore other project state in correct order
+            # Restore other project state (common to both versions)
             self.fixture_type_attributes = project_data.get('fixture_type_attributes', {})
             self.ma3_config = project_data.get('ma3_config')
             
@@ -1077,25 +3153,164 @@ class MVRApp(QMainWindow):
             # Update UI
             self.update_ui_state()
             self.update_window_title()
-            self.status_bar.showMessage(f"Project loaded: {Path(file_path).name}")
+            
+            # Show informative status message about project loading
+            relocated_files = []
+            resolved_relative_paths = False
+            
+            if version == '2.0':
+                # Check if any files were relocated by user
+                if project_data.get('master_file_path') and self.controller.master_file_path:
+                    original_path = self._resolve_path_from_project(project_data['master_file_path'], file_path)
+                    if original_path != project_data.get('master_file_path'):
+                        resolved_relative_paths = True
+                    if self.controller.master_file_path != original_path:
+                        relocated_files.append("master")
+                        
+                if project_data.get('remote_file_path') and self.controller.remote_file_path:
+                    original_path = self._resolve_path_from_project(project_data['remote_file_path'], file_path)
+                    if original_path != project_data.get('remote_file_path'):
+                        resolved_relative_paths = True
+                    if self.controller.remote_file_path != original_path:
+                        relocated_files.append("remote")
+            else:
+                # Version 1.0 legacy handling
+                if project_data.get('mvr_file_path') and self.controller.current_file_path:
+                    original_path = self._resolve_path_from_project(project_data['mvr_file_path'], file_path)
+                    if original_path != project_data.get('mvr_file_path'):
+                        resolved_relative_paths = True
+                    if self.controller.current_file_path != original_path:
+                        relocated_files.append("MVR")
+            
+            # Create appropriate status message
+            if relocated_files:
+                self.status_bar.showMessage(f"Project loaded: {Path(file_path).name} (relocated {', '.join(relocated_files)} files)")
+            elif resolved_relative_paths:
+                self.status_bar.showMessage(f"Project loaded: {Path(file_path).name} (resolved relative paths)")
+            else:
+                self.status_bar.showMessage(f"Project loaded: {Path(file_path).name}")
             
         except Exception as e:
             QMessageBox.critical(self, "Load Error", f"Failed to load project:\n{str(e)}")
     
+    def _make_path_relative(self, absolute_path: str, project_file_path: str) -> str:
+        """Convert absolute path to relative path from project file location."""
+        try:
+            if not absolute_path:
+                return ""
+            
+            project_dir = Path(project_file_path).parent
+            target_path = Path(absolute_path)
+            
+            # Try to make it relative, fall back to absolute if not possible
+            try:
+                relative_path = target_path.relative_to(project_dir)
+                return str(relative_path)
+            except ValueError:
+                # Paths are on different drives or too far apart, keep absolute
+                return absolute_path
+                
+        except Exception:
+            # Any error, return original path
+            return absolute_path
+    
+    def _resolve_path_from_project(self, stored_path: str, project_file_path: str) -> str:
+        """Resolve a stored path (relative or absolute) to absolute path."""
+        try:
+            if not stored_path:
+                return ""
+            
+            # If it's already absolute and exists, use it
+            if Path(stored_path).is_absolute() and Path(stored_path).exists():
+                return stored_path
+            
+            # Try to resolve as relative to project file
+            project_dir = Path(project_file_path).parent
+            resolved_path = project_dir / stored_path
+            
+            if resolved_path.exists():
+                return str(resolved_path.resolve())
+            
+            # If relative path doesn't work, try the original path
+            if Path(stored_path).exists():
+                return str(Path(stored_path).resolve())
+            
+            # Path doesn't exist, return as-is for error handling
+            return stored_path
+            
+        except Exception:
+            # Any error, return original path
+            return stored_path
+    
+    def _prompt_for_missing_file(self, file_description: str, original_path: str, file_types: str = "All Files (*)") -> str:
+        """Prompt user to locate a missing file."""
+        reply = QMessageBox.question(
+            self, f"{file_description} Not Found",
+            f"The {file_description.lower()} '{Path(original_path).name}' was not found at:\n{original_path}\n\nDo you want to locate it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            new_path, _ = QFileDialog.getOpenFileName(
+                self, f"Locate {file_description}", str(Path(original_path).name), file_types
+            )
+            return new_path if new_path else ""
+        
+        return ""
+
     def save_project_file(self, file_path: str) -> bool:
         """Save project state to file. Returns True if successful."""
         try:
             import json
             
-            # Collect essential project data
+            # Collect essential project data with relative paths for transferability
             project_data = {
-                'version': '1.0',
-                'mvr_file_path': self.controller.current_file_path,
+                'version': '2.0',  # Updated version for expanded data structure
+                
+                # Legacy single-dataset support (for backward compatibility)
+                'mvr_file_path': self._make_path_relative(self.controller.current_file_path, file_path),
                 'fixture_type_attributes': self.fixture_type_attributes,
                 'fixture_type_matches': self.controller.get_current_fixture_type_matches(),
-                'external_gdtf_folder': self.config.get_external_gdtf_folder(),
+                
+                # Master dataset
+                'master_file_path': self._make_path_relative(self.controller.master_file_path, file_path),
+                'master_import_type': self.controller.master_import_type,
+                'master_fixture_type_attributes': getattr(self, 'master_fixture_type_attributes', {}),
+                'master_fixture_type_matches': self.controller.get_current_master_fixture_type_matches(),
+                
+                # Remote dataset  
+                'remote_file_path': self._make_path_relative(self.controller.remote_file_path, file_path),
+                'remote_import_type': self.controller.remote_import_type,
+                'remote_fixture_type_attributes': getattr(self, 'remote_fixture_type_attributes', {}),
+                'remote_fixture_type_matches': self.controller.get_current_remote_fixture_type_matches(),
+                
+                # Alignment data
+                'alignment_results': self.controller.alignment_results,
+                'manual_alignments': self.controller.manual_alignments,
+                'alignment_mode': self.controller.alignment_mode,
+                
+                # Configuration and settings
+                'external_gdtf_folder': self._make_path_relative(self.config.get_external_gdtf_folder(), file_path),
                 'ma3_config': self.ma3_config,
-                'output_format': self.format_combo.currentText()
+                'output_format': self.format_combo.currentText(),
+                
+                # UI state
+                'current_tab_index': self.tab_widget.currentIndex(),
+                'window_geometry': {
+                    'x': self.geometry().x(),
+                    'y': self.geometry().y(),
+                    'width': self.geometry().width(),
+                    'height': self.geometry().height()
+                },
+                
+                # Analysis results cache (to avoid re-computation)
+                'has_master_results': hasattr(self, 'master_results') and self.master_results is not None,
+                'has_remote_results': hasattr(self, 'remote_results') and self.remote_results is not None,
+                
+                # Additional metadata
+                'created_timestamp': getattr(self, 'project_created_timestamp', self._get_timestamp()),
+                'last_modified_timestamp': self._get_timestamp(),
+                'app_version': '2.0'
             }
             
             # Save to file
@@ -1105,6 +3320,10 @@ class MVRApp(QMainWindow):
             # Update project state
             self.current_project_path = file_path
             self.project_dirty = False
+            
+            # Set created timestamp if this is a new project
+            if not hasattr(self, 'project_created_timestamp'):
+                self.project_created_timestamp = project_data['created_timestamp']
             
             # Add to recent projects
             self.add_to_recent_projects(file_path)
@@ -1193,17 +3412,23 @@ class MVRApp(QMainWindow):
         return False
     
     def export_results(self):
-        """Export analysis results to file."""
-        if not self.current_results:
-            QMessageBox.warning(self, "No Results", "No analysis results to export.")
-            return
-        
+        """Export analysis results to file, supporting Master, Remote, and Alignment data."""
         try:
-            # Get last used directory
-            last_dir = self.config.get_last_export_directory()
-            start_dir = last_dir if last_dir and os.path.exists(last_dir) else ""
+            # Check what data we have available for export
+            has_master = hasattr(self, 'master_results') and self.master_results is not None and self.master_fixture_type_attributes
+            has_remote = hasattr(self, 'remote_results') and self.remote_results is not None and self.remote_fixture_type_attributes
+            has_alignment = self.controller.alignment_results is not None
             
-            # Determine file extension
+            if not (has_master or has_remote or has_alignment):
+                QMessageBox.information(self, "No Data", "Please load fixtures, select attributes, and optionally perform alignment before exporting.")
+                return
+            
+            # Create export options dialog
+            export_options = self._get_export_options(has_master, has_remote, has_alignment)
+            if not export_options:
+                return
+            
+            # Get output format
             output_format = self.format_combo.currentText()
             extensions = {
                 "text": "txt",
@@ -1213,11 +3438,15 @@ class MVRApp(QMainWindow):
             }
             ext = extensions.get(output_format, "txt")
             
-            # Get save path
+            # Get last used directory
+            last_dir = self.config.get_last_export_directory()
+            start_dir = last_dir if last_dir and os.path.exists(last_dir) else ""
+            
+            # Show file dialog
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
                 "Export Analysis Results",
-                f"{start_dir}/mvr_analysis.{ext}",
+                f"{start_dir}/fixture_analysis.{ext}",
                 f"{output_format.upper()} Files (*.{ext});;All Files (*)"
             )
             
@@ -1225,36 +3454,377 @@ class MVRApp(QMainWindow):
                 # Save the directory for next time
                 self.config.set_last_export_directory(str(Path(file_path).parent))
                 
-                # Export the results
-                ma3_config = None
-                if output_format == "ma3_xml":
-                    ma3_config = self.ma3_config
-                
-                result = self.controller.export_results(self.current_results, output_format, file_path, ma3_config)
-                
-                if result["success"]:
-                    QMessageBox.information(
-                        self, 
-                        "Export Successful", 
-                        f"Results exported to:\n{file_path}"
-                    )
-                    self.status_bar.showMessage(f"Results exported to {Path(file_path).name}")
-                else:
-                    QMessageBox.critical(self, "Export Error", f"Failed to export results:\n{result['error']}")
-                    
+                # Perform export based on selected options
+                self._perform_export(file_path, output_format, export_options)
+            
         except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"Error exporting results:\n{str(e)}")
+            QMessageBox.critical(self, "Error", f"Error during export:\n{str(e)}")
+    
+    def _get_export_options(self, has_master: bool, has_remote: bool, has_alignment: bool) -> dict:
+        """Get export options from user via simple dialog."""
+        from PyQt6.QtWidgets import QCheckBox, QVBoxLayout, QHBoxLayout, QPushButton, QDialog
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Export Options")
+        dialog.setFixedSize(350, 200)
+        
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Select data to export:"))
+        
+        options = {}
+        
+        if has_master:
+            master_cb = QCheckBox("Master Fixtures Analysis")
+            master_cb.setChecked(True)
+            layout.addWidget(master_cb)
+            options['master'] = master_cb
+        
+        if has_remote:
+            remote_cb = QCheckBox("Remote Fixtures Analysis")
+            remote_cb.setChecked(True)
+            layout.addWidget(remote_cb)
+            options['remote'] = remote_cb
+        
+        if has_alignment:
+            alignment_cb = QCheckBox("Fixture Alignment Results")
+            alignment_cb.setChecked(True)
+            layout.addWidget(alignment_cb)
+            options['alignment'] = alignment_cb
+        
+        if has_master and has_remote and has_alignment:
+            combined_cb = QCheckBox("Combined Summary Report")
+            combined_cb.setChecked(True)
+            layout.addWidget(combined_cb)
+            options['combined'] = combined_cb
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        ok_btn = QPushButton("Export")
+        cancel_btn = QPushButton("Cancel")
+        ok_btn.clicked.connect(dialog.accept)
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(ok_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            return {key: cb.isChecked() for key, cb in options.items()}
+        return None
+    
+    def _perform_export(self, file_path: str, output_format: str, export_options: dict):
+        """Perform the actual export based on options."""
+        try:
+            exported_files = []
+            
+            # Get MA3 config if needed
+            ma3_config = None
+            if output_format == "ma3_xml":
+                ma3_config = self.ma3_config
+            
+            # Export master data
+            if export_options.get("master", False):
+                master_file_path = self._get_export_file_path(file_path, "master")
+                result = self._export_master_data(master_file_path, output_format, ma3_config)
+                if result["success"]:
+                    exported_files.append(f"Master: {Path(master_file_path).name}")
+                else:
+                    QMessageBox.warning(self, "Export Warning", f"Failed to export master data: {result['error']}")
+            
+            # Export remote data
+            if export_options.get("remote", False):
+                remote_file_path = self._get_export_file_path(file_path, "remote")
+                result = self._export_remote_data(remote_file_path, output_format, ma3_config)
+                if result["success"]:
+                    exported_files.append(f"Remote: {Path(remote_file_path).name}")
+                else:
+                    QMessageBox.warning(self, "Export Warning", f"Failed to export remote data: {result['error']}")
+            
+            # Export alignment data
+            if export_options.get("alignment", False):
+                alignment_file_path = self._get_export_file_path(file_path, "alignment")
+                result = self._export_alignment_data(alignment_file_path, output_format)
+                if result["success"]:
+                    exported_files.append(f"Alignment: {Path(alignment_file_path).name}")
+                else:
+                    QMessageBox.warning(self, "Export Warning", f"Failed to export alignment data: {result['error']}")
+            
+            # Export combined data
+            if export_options.get("combined", False):
+                combined_file_path = self._get_export_file_path(file_path, "combined")
+                result = self._export_combined_data(combined_file_path, output_format, ma3_config)
+                if result["success"]:
+                    exported_files.append(f"Combined: {Path(combined_file_path).name}")
+                else:
+                    QMessageBox.warning(self, "Export Warning", f"Failed to export combined data: {result['error']}")
+            
+            if exported_files:
+                files_text = "\n".join(exported_files)
+                QMessageBox.information(
+                    self, 
+                    "Export Complete", 
+                    f"Successfully exported:\n{files_text}"
+                )
+                self.status_bar.showMessage(f"Export complete: {len(exported_files)} files")
+            else:
+                QMessageBox.warning(self, "Export Failed", "No files were exported successfully.")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Error during export:\n{str(e)}")
+    
+    def _get_export_file_path(self, base_path: str, suffix: str) -> str:
+        """Generate export file path with suffix."""
+        path = Path(base_path)
+        stem = path.stem
+        extension = path.suffix
+        return str(path.parent / f"{stem}_{suffix}{extension}")
+    
+    def _export_master_data(self, file_path: str, output_format: str, ma3_config: dict = None) -> dict:
+        """Export master fixture data."""
+        if not self.master_fixture_type_attributes:
+            return {"success": False, "error": "No master attributes selected"}
+        
+        # Analyze master fixtures
+        result = self.controller.analyze_master_fixtures(
+            self.master_fixture_type_attributes, 
+            output_format, 
+            ma3_config
+        )
+        
+        if result["success"]:
+            # Export the results
+            export_result = self.controller.export_results(result, output_format, file_path, ma3_config)
+            return export_result
+        
+        return result
+    
+    def _export_remote_data(self, file_path: str, output_format: str, ma3_config: dict = None) -> dict:
+        """Export remote fixture data."""
+        if not self.remote_fixture_type_attributes:
+            return {"success": False, "error": "No remote attributes selected"}
+        
+        # Analyze remote fixtures
+        result = self.controller.analyze_remote_fixtures(
+            self.remote_fixture_type_attributes, 
+            output_format, 
+            ma3_config
+        )
+        
+        if result["success"]:
+            # Export the results
+            export_result = self.controller.export_results(result, output_format, file_path, ma3_config)
+            return export_result
+        
+        return result
+    
+    def _export_alignment_data(self, file_path: str, output_format: str) -> dict:
+        """Export alignment data."""
+        if not self.controller.alignment_results:
+            return {"success": False, "error": "No alignment data available"}
+        
+        try:
+            # Convert alignment data to exportable format
+            alignment_data = self._format_alignment_data_for_export()
+            
+            # Write to file
+            if output_format == "csv":
+                self._write_alignment_csv(file_path, alignment_data)
+            elif output_format == "json":
+                self._write_alignment_json(file_path, alignment_data)
+            else:
+                self._write_alignment_text(file_path, alignment_data)
+            
+            return {"success": True}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def _export_combined_data(self, file_path: str, output_format: str, ma3_config: dict = None) -> dict:
+        """Export combined master, remote, and alignment data."""
+        try:
+            combined_data = {
+                "export_timestamp": self._get_timestamp(),
+                "master_fixtures": [],
+                "remote_fixtures": [],
+                "alignment_results": []
+            }
+            
+            # Add master data if available
+            if self.master_fixture_type_attributes:
+                master_result = self.controller.analyze_master_fixtures(
+                    self.master_fixture_type_attributes, "json"
+                )
+                if master_result["success"]:
+                    combined_data["master_fixtures"] = self._extract_fixture_data(master_result)
+            
+            # Add remote data if available
+            if self.remote_fixture_type_attributes:
+                remote_result = self.controller.analyze_remote_fixtures(
+                    self.remote_fixture_type_attributes, "json"
+                )
+                if remote_result["success"]:
+                    combined_data["remote_fixtures"] = self._extract_fixture_data(remote_result)
+            
+            # Add alignment data if available
+            if self.controller.alignment_results:
+                combined_data["alignment_results"] = self._format_alignment_data_for_export()
+            
+            # Write combined data
+            if output_format == "json":
+                import json
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(combined_data, f, indent=2, default=str)
+            else:
+                # For other formats, write a summary
+                self._write_combined_summary(file_path, combined_data)
+            
+            return {"success": True}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def _format_alignment_data_for_export(self):
+        """Format alignment data for export."""
+        formatted_data = []
+        
+        # Check if we have manual alignments, generate results if needed
+        alignment_mode = self.controller.get_alignment_mode()
+        if alignment_mode == "manual":
+            # Generate alignment results from manual alignments
+            result = self.controller.generate_alignment_results_from_manual()
+            if result.get("success"):
+                alignment_results = result["alignment_results"]
+            else:
+                alignment_results = []
+        else:
+            # Use existing alignment results
+            alignment_results = self.controller.alignment_results or []
+        
+        for result in alignment_results:
+            row = {
+                "master_name": result["master_fixture"].name if result["master_fixture"] else "",
+                "master_type": getattr(result["master_fixture"], 'gdtf_spec', '') if result["master_fixture"] else "",
+                "remote_name": result["remote_fixture"].name if result["remote_fixture"] else "",
+                "remote_type": getattr(result["remote_fixture"], 'gdtf_spec', '') if result["remote_fixture"] else "",
+                "alignment_status": result["alignment_status"],
+                "confidence": result["confidence"],
+                "notes": result["notes"]
+            }
+            formatted_data.append(row)
+        
+        return formatted_data
+    
+    def _write_alignment_csv(self, file_path: str, data: list):
+        """Write alignment data to CSV file."""
+        import csv
+        
+        fieldnames = ["master_name", "master_type", "remote_name", "remote_type", 
+                     "alignment_status", "confidence", "notes"]
+        
+        with open(file_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(data)
+    
+    def _write_alignment_json(self, file_path: str, data: list):
+        """Write alignment data to JSON file."""
+        import json
+        
+        export_data = {
+            "export_timestamp": self._get_timestamp(),
+            "alignment_results": data
+        }
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(export_data, f, indent=2, default=str)
+    
+    def _write_alignment_text(self, file_path: str, data: list):
+        """Write alignment data to text file."""
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write("FIXTURE ALIGNMENT RESULTS\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(f"Export Date: {self._get_timestamp()}\n")
+            f.write(f"Total Alignments: {len(data)}\n\n")
+            
+            for i, row in enumerate(data, 1):
+                f.write(f"{i}. Master: {row['master_name']} ({row['master_type']})\n")
+                f.write(f"   Remote: {row['remote_name']} ({row['remote_type']})\n")
+                f.write(f"   Status: {row['alignment_status']} ({row['confidence']:.2%})\n")
+                f.write(f"   Notes: {row['notes']}\n\n")
+    
+    def _extract_fixture_data(self, analysis_result: dict):
+        """Extract fixture data from analysis result."""
+        fixtures_data = []
+        
+        if analysis_result.get("analysis_results") and hasattr(analysis_result["analysis_results"], 'fixtures'):
+            for fixture in analysis_result["analysis_results"].fixtures:
+                fixture_data = {
+                    "id": fixture.fixture_id,
+                    "name": fixture.name,
+                    "type": fixture.gdtf_spec or "Unknown",
+                    "mode": fixture.gdtf_mode or "",
+                    "base_address": fixture.base_address,
+                    "absolute_addresses": getattr(fixture, 'absolute_addresses', {})
+                }
+                fixtures_data.append(fixture_data)
+        
+        return fixtures_data
+    
+    def _write_combined_summary(self, file_path: str, combined_data: dict):
+        """Write combined data summary to text file."""
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write("COMBINED FIXTURE ANALYSIS RESULTS\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(f"Export Date: {combined_data['export_timestamp']}\n\n")
+            
+            f.write(f"Master Fixtures: {len(combined_data['master_fixtures'])}\n")
+            f.write(f"Remote Fixtures: {len(combined_data['remote_fixtures'])}\n")
+            f.write(f"Alignment Results: {len(combined_data['alignment_results'])}\n\n")
+            
+            # Write summary statistics
+            if combined_data['alignment_results']:
+                matched = sum(1 for r in combined_data['alignment_results'] 
+                            if r['alignment_status'] == 'matched')
+                total = len(combined_data['alignment_results'])
+                f.write(f"Alignment Success Rate: {matched}/{total} ({matched/total*100:.1f}%)\n")
     
     def update_ui_state(self):
         """Update UI state based on current application state."""
-        status = self.controller.get_current_status()
+        # Get status for each dataset
+        main_status = self.controller.get_current_status()
+        master_status = self.controller.get_master_status()
+        remote_status = self.controller.get_remote_status()
         
-        # Update GDTF buttons
+        # Update master UI elements with master-specific status
+        self._update_master_ui_state(master_status)
+        
+        # Update remote UI elements with remote-specific status
+        self._update_remote_ui_state(remote_status)
+        
+        # Update alignment UI elements
+        self._update_alignment_ui_state()
+        
+        # Update export button based on both master and remote
+        has_results = (
+            (hasattr(self, 'master_results') and self.master_results is not None and self.master_fixture_type_attributes) or
+            (hasattr(self, 'remote_results') and self.remote_results is not None and self.remote_fixture_type_attributes)
+        )
+        
+        if hasattr(self, 'export_btn'):
+            self.export_btn.setEnabled(bool(has_results))
+        
+        # Update save action
+        if hasattr(self, 'save_action'):
+            self.save_action.setEnabled(self.project_dirty)
+    
+    def _update_master_ui_state(self, status):
+        """Update master UI elements based on master dataset state."""
+        # For master tab, we use the master-specific controller status
         file_loaded = status["file_loaded"]
         has_fixtures = status["matched_fixtures"] > 0 or status["unmatched_fixtures"] > 0
         
         # Manual matching button - enabled when fixtures loaded
-        self.match_gdtf_btn.setEnabled(has_fixtures)
+        if hasattr(self, 'master_match_gdtf_btn'):
+            self.master_match_gdtf_btn.setEnabled(bool(has_fixtures))
         
         # Update select attributes button
         can_select_attributes = (
@@ -1262,31 +3832,86 @@ class MVRApp(QMainWindow):
             status["matched_fixtures"] > 0
         )
         
-        self.select_attrs_btn.setEnabled(can_select_attributes)
+        if hasattr(self, 'master_select_attrs_btn'):
+            self.master_select_attrs_btn.setEnabled(bool(can_select_attributes))
         
         # Update attribute selection status label
-        if can_select_attributes:
-            if self.fixture_type_attributes:
-                total_attrs = sum(len(attrs) for attrs in self.fixture_type_attributes.values())
-                if total_attrs > 0:
-                    self.attribute_status_label.setText(f"Attributes saved ({total_attrs} total) - you can modify anytime")
-                    self.attribute_status_label.setStyleSheet("color: green; font-weight: bold; padding: 5px;")
+        if hasattr(self, 'master_attribute_status_label'):
+            if can_select_attributes:
+                if self.master_fixture_type_attributes:
+                    total_attrs = sum(len(attrs) for attrs in self.master_fixture_type_attributes.values())
+                    if total_attrs > 0:
+                        self.master_attribute_status_label.setText(f"Attributes saved ({total_attrs} total) - you can modify anytime")
+                        self.master_attribute_status_label.setStyleSheet("color: green; font-weight: bold; padding: 5px;")
+                    else:
+                        self.master_attribute_status_label.setText("No attributes selected - click to modify")
+                        self.master_attribute_status_label.setStyleSheet("color: orange; font-weight: bold; padding: 5px;")
                 else:
-                    self.attribute_status_label.setText("No attributes selected - click to modify")
-                    self.attribute_status_label.setStyleSheet("color: orange; font-weight: bold; padding: 5px;")
+                    self.master_attribute_status_label.setText("Ready for attribute selection!")
+                    self.master_attribute_status_label.setStyleSheet("color: blue; font-weight: bold; padding: 5px;")
             else:
-                self.attribute_status_label.setText("Ready for attribute selection!")
-                self.attribute_status_label.setStyleSheet("color: blue; font-weight: bold; padding: 5px;")
-        else:
-            self.attribute_status_label.setText("Complete steps 1-2 first")
-            self.attribute_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+                self.master_attribute_status_label.setText("Complete steps 1-2 first")
+                self.master_attribute_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+    
+    def _update_remote_ui_state(self, status):
+        """Update remote UI elements based on current state."""
+        # For remote tab, we check if remote results exist
+        has_remote_results = hasattr(self, 'remote_results') and self.remote_results is not None
+        has_remote_fixtures = has_remote_results and self.remote_results.get("total_fixtures", 0) > 0
         
-        # Update results status for automatic analysis
-        self._update_results_status()
+        # Manual matching button - enabled when fixtures loaded
+        if hasattr(self, 'remote_match_gdtf_btn'):
+            self.remote_match_gdtf_btn.setEnabled(bool(has_remote_fixtures))
         
-        # Update save action
-        self.save_action.setEnabled(self.project_dirty)
-
+        # Update select attributes button
+        can_select_attributes = has_remote_results and self.remote_results.get("success", False)
+        
+        if hasattr(self, 'remote_select_attrs_btn'):
+            self.remote_select_attrs_btn.setEnabled(bool(can_select_attributes))
+        
+        # Update attribute selection status label
+        if hasattr(self, 'remote_attribute_status_label'):
+            if can_select_attributes:
+                if self.remote_fixture_type_attributes:
+                    total_attrs = sum(len(attrs) for attrs in self.remote_fixture_type_attributes.values())
+                    if total_attrs > 0:
+                        self.remote_attribute_status_label.setText(f"Attributes saved ({total_attrs} total) - you can modify anytime")
+                        self.remote_attribute_status_label.setStyleSheet("color: green; font-weight: bold; padding: 5px;")
+                    else:
+                        self.remote_attribute_status_label.setText("No attributes selected - click to modify")
+                        self.remote_attribute_status_label.setStyleSheet("color: orange; font-weight: bold; padding: 5px;")
+                else:
+                    self.remote_attribute_status_label.setText("Ready for attribute selection!")
+                    self.remote_attribute_status_label.setStyleSheet("color: blue; font-weight: bold; padding: 5px;")
+            else:
+                self.remote_attribute_status_label.setText("Complete steps 1-2 first")
+                self.remote_attribute_status_label.setStyleSheet("color: gray; font-style: italic; padding: 5px;")
+    
+    def _update_alignment_ui_state(self):
+        """Update alignment UI elements based on current state."""
+        # Check if we have both master and remote data
+        has_master = hasattr(self, 'master_results') and self.master_results is not None
+        has_remote = hasattr(self, 'remote_results') and self.remote_results is not None
+        
+        can_align = has_master and has_remote
+        
+        if hasattr(self, 'align_btn'):
+            self.align_btn.setEnabled(bool(can_align))
+        
+        # Populate alignment tables when both datasets are available
+        if can_align:
+            self._populate_alignment_tables()
+            self._update_alignment_status()
+        elif hasattr(self, 'alignment_status'):
+            if has_master and not has_remote:
+                self.alignment_status.setText("Load remote fixtures to begin routing")
+                self.alignment_status.setStyleSheet("color: orange; font-style: italic; padding: 10px;")
+            elif has_remote and not has_master:
+                self.alignment_status.setText("Load master fixtures to begin routing")
+                self.alignment_status.setStyleSheet("color: orange; font-style: italic; padding: 10px;")
+            else:
+                self.alignment_status.setText("Load Master and Remote fixtures to begin routing")
+                self.alignment_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
 
 def main():
     """Main entry point for the application."""

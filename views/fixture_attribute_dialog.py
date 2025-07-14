@@ -24,11 +24,12 @@ class FixtureAttributeDialog(QDialog):
     Uses controller for all business logic.
     """
     
-    def __init__(self, parent, controller: MVRController, config=None, existing_fixture_type_attributes=None):
+    def __init__(self, parent, controller: MVRController, config=None, existing_fixture_type_attributes=None, data_source="current"):
         super().__init__(parent)
         self.controller = controller
         self.config = config
         self.existing_fixture_type_attributes = existing_fixture_type_attributes or {}
+        self.data_source = data_source  # "current", "master", or "remote"
         self.fixture_type_controls = {}
         self.fixture_type_attributes = {}  # Store selected attributes per fixture type
         self.setup_ui()
@@ -39,13 +40,21 @@ class FixtureAttributeDialog(QDialog):
     
     def setup_ui(self):
         """Create the dialog interface."""
-        self.setWindowTitle("Attribute Selection per Fixture Type")
+        # Set window title based on data source
+        if self.data_source == "master":
+            self.setWindowTitle("Master Attribute Selection per Fixture Type")
+        elif self.data_source == "remote":
+            self.setWindowTitle("Remote Attribute Selection per Fixture Type")
+        else:
+            self.setWindowTitle("Attribute Selection per Fixture Type")
+            
         self.setGeometry(200, 200, 1200, 800)
         
         layout = QVBoxLayout(self)
         
         # Title
-        title = QLabel("Select Attributes for Each Fixture Type")
+        title_text = f"Select Attributes for Each Fixture Type ({self.data_source.title()})"
+        title = QLabel(title_text)
         title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         layout.addWidget(title)
         
@@ -103,9 +112,18 @@ class FixtureAttributeDialog(QDialog):
             control['group'].setParent(None)
         self.fixture_type_controls.clear()
         
-        # Get current status
-        status = self.controller.get_current_status()
+        # Get current status based on data source
+        if self.data_source == "master":
+            status = self.controller.get_master_status()
+        elif self.data_source == "remote":
+            status = self.controller.get_remote_status()
+        else:
+            status = self.controller.get_current_status()
+        
         if not status["file_loaded"]:
+            no_data_label = QLabel(f"No {self.data_source} fixtures loaded.")
+            no_data_label.setStyleSheet("color: red; font-weight: bold; padding: 20px;")
+            self.fixture_layout.addWidget(no_data_label)
             return
         
         # Get fixture types information
@@ -126,9 +144,17 @@ class FixtureAttributeDialog(QDialog):
         self.fixture_layout.addStretch()
     
     def _get_fixture_types_info(self) -> Dict[str, Dict]:
-        """Get fixture type information from controller."""
-        # Get all fixtures (both matched and unmatched)
-        all_fixtures = self.controller.matched_fixtures
+        """Get fixture type information from controller based on data source."""
+        # Get fixtures based on data source
+        if self.data_source == "master":
+            all_fixtures = self.controller.master_matched_fixtures
+        elif self.data_source == "remote":
+            all_fixtures = self.controller.remote_matched_fixtures
+        else:
+            all_fixtures = self.controller.matched_fixtures
+        
+        if not all_fixtures:
+            return {}
         
         # Group by fixture type
         fixture_types = {}
@@ -353,7 +379,7 @@ class FixtureAttributeDialog(QDialog):
     def accept(self):
         """Accept the dialog if selections are valid."""
         if self.validate_selections():
-            super().accept() 
+            super().accept()
 
     def load_existing_selections(self):
         """Load existing attribute selections into the dialog."""
