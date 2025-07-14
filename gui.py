@@ -4310,17 +4310,13 @@ class MVRApp(QMainWindow):
         if not self.remote_fixture_type_attributes:
             return {"success": False, "error": "No remote attributes selected"}
         
-        # Analyze remote fixtures
-        result = self.controller.analyze_remote_fixtures(
+        # Export existing remote fixtures without re-analyzing (preserves assigned sequences)
+        result = self.controller.export_remote_fixtures_direct(
             self.remote_fixture_type_attributes, 
             output_format, 
+            file_path,
             ma3_config
         )
-        
-        if result["success"]:
-            # Export the results
-            export_result = self.controller.export_results(result, output_format, file_path, ma3_config)
-            return export_result
         
         return result
     
@@ -4364,13 +4360,11 @@ class MVRApp(QMainWindow):
                 if master_result["success"]:
                     combined_data["master_fixtures"] = self._extract_fixture_data(master_result)
             
-            # Add remote data if available
+            # Add remote data if available (preserve sequences)
             if self.remote_fixture_type_attributes:
-                remote_result = self.controller.analyze_remote_fixtures(
-                    self.remote_fixture_type_attributes, "json"
+                combined_data["remote_fixtures"] = self._extract_fixture_data_direct(
+                    self.controller.remote_matched_fixtures
                 )
-                if remote_result["success"]:
-                    combined_data["remote_fixtures"] = self._extract_fixture_data(remote_result)
             
             # Add alignment data if available
             if self.controller.alignment_results:
@@ -4626,6 +4620,25 @@ class MVRApp(QMainWindow):
             else:
                 self.alignment_status.setText("Load Master and Remote fixtures to begin attribute routing")
                 self.alignment_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
+
+    def _extract_fixture_data_direct(self, fixtures):
+        """Extract fixture data directly from fixture objects (preserves sequences)."""
+        fixtures_data = []
+        
+        for fixture in fixtures:
+            if fixture.is_matched():
+                fixture_data = {
+                    "id": fixture.fixture_id,
+                    "name": fixture.name,
+                    "type": fixture.gdtf_spec or "Unknown",
+                    "mode": fixture.gdtf_mode or "",
+                    "base_address": fixture.base_address,
+                    "absolute_addresses": getattr(fixture, 'absolute_addresses', {}),
+                    "attribute_sequences": getattr(fixture, 'attribute_sequences', {})
+                }
+                fixtures_data.append(fixture_data)
+        
+        return fixtures_data
 
 def main():
     """Main entry point for the application."""

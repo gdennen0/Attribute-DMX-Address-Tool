@@ -1321,3 +1321,65 @@ class MVRController:
         except Exception as e:
             # Log error but don't fail the alignment
             print(f"Error assigning sequences for manual alignment: {e}")
+
+    def export_remote_fixtures_direct(self, fixture_type_attributes: Dict[str, List[str]], output_format: str, file_path: str, ma3_config: dict = None) -> Dict[str, Any]:
+        """
+        Export remote fixtures directly without re-analyzing them.
+        This preserves any sequences that were assigned during alignment.
+        
+        Args:
+            fixture_type_attributes: Dict mapping fixture types to their selected attributes
+            output_format: Output format ('text', 'csv', 'json', 'ma3_xml')
+            file_path: Path to save the export file
+            ma3_config: Configuration for MA3 XML export
+            
+        Returns:
+            Dict containing export results
+        """
+        try:
+            if not self.remote_matched_fixtures:
+                return {"success": False, "error": "No remote fixtures loaded"}
+            
+            # Create analysis results directly from existing fixtures (preserves sequences)
+            from models.data_models import AnalysisResults
+            
+            # Collect all selected attributes across all fixture types
+            all_selected_attributes = []
+            for attrs in fixture_type_attributes.values():
+                all_selected_attributes.extend(attrs)
+            all_selected_attributes = sorted(list(set(all_selected_attributes)))
+            
+            # Generate summary from existing fixtures
+            summary = self.mvr_service._generate_summary_by_type(self.remote_matched_fixtures, fixture_type_attributes)
+            
+            # Generate export data from existing fixtures
+            export_data = self.mvr_service._generate_export_data_by_type(self.remote_matched_fixtures, fixture_type_attributes, output_format, ma3_config)
+            
+            # Create analysis results object
+            analysis_results = AnalysisResults(
+                fixtures=self.remote_matched_fixtures,
+                summary=summary,
+                selected_attributes=all_selected_attributes,
+                output_format=output_format,
+                export_data=export_data,
+                validation_info={}
+            )
+            
+            # Save to file
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(export_data)
+            except Exception as e:
+                return {"success": False, "error": f"Error saving file: {e}"}
+            
+            return {
+                "success": True,
+                "file_path": file_path,
+                "export_data": export_data,
+                "summary": summary
+            }
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
