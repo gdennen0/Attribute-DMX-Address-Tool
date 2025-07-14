@@ -528,6 +528,8 @@ class MVRService:
             if ma3_config is None:
                 raise ValueError("MA3 XML export requires configuration")
             return self._export_ma3_xml(fixtures, selected_attributes, ma3_config)
+        elif output_format == "ma3_sequences":
+            return self._export_ma3_sequences_xml(fixtures, selected_attributes)
         else:
             raise ValueError(f"Unsupported output format: {output_format}")
     
@@ -543,6 +545,8 @@ class MVRService:
             if ma3_config is None:
                 raise ValueError("MA3 XML export requires configuration")
             return self._export_ma3_xml_by_type(fixtures, fixture_type_attributes, ma3_config)
+        elif output_format == "ma3_sequences":
+            return self._export_ma3_sequences_xml_by_type(fixtures, fixture_type_attributes)
         else:
             raise ValueError(f"Unsupported output format: {output_format}")
     
@@ -1144,3 +1148,294 @@ class MVRService:
             "match_rate": (matched / total * 100) if total > 0 else 0,
             "fixture_types": fixture_types
         } 
+
+    def _export_ma3_sequences_xml(self, fixtures: List[FixtureMatch], selected_attributes: List[str]) -> str:
+        """Export MA3 sequences XML format with one sequence per attribute per fixture, values set to 100."""
+        import uuid
+        from xml.etree.ElementTree import Element, SubElement, tostring
+        from xml.dom import minidom
+        
+        # Create root element
+        root = Element("GMA3", DataVersion="2.2.5.2")
+        
+        # Sort fixtures by fixture_id in ascending order
+        sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
+                                key=lambda x: x.fixture_id)
+        
+        # Create a sequence for each attribute of each fixture
+        for fixture in sorted_fixtures:
+            fixture_attributes = [attr for attr in selected_attributes 
+                                if attr in fixture.attribute_offsets]
+            
+            for attr_name in fixture_attributes:
+                sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                if sequence_num:
+                    # Create sequence element
+                    sequence = SubElement(root, "Sequence")
+                    
+                    # Set sequence attributes
+                    sequence_name = f"{fixture.fixture_id}_{attr_name}"
+                    sequence.set("Name", sequence_name)
+                    sequence.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                    sequence.set("AutoStart", "Yes")
+                    sequence.set("AutoStop", "Yes")
+                    sequence.set("AutoFix", "No")
+                    sequence.set("AutoStomp", "No")
+                    sequence.set("SoftLTP", "Yes")
+                    sequence.set("XFadeReload", "No")
+                    sequence.set("SwapProtect", "No")
+                    sequence.set("KillProtect", "No")
+                    sequence.set("UseExecutorTime", "Yes")
+                    sequence.set("OffwhenOverridden", "Yes")
+                    sequence.set("SequMIB", "Enabled")
+                    sequence.set("AutoPrePos", "No")
+                    sequence.set("WrapAround", "Yes")
+                    sequence.set("MasterGoMode", "None")
+                    sequence.set("SpeedfromRate", "No")
+                    sequence.set("Tracking", "Yes")
+                    sequence.set("IncludeLinkLastGo", "Yes")
+                    sequence.set("RateScale", "One")
+                    sequence.set("SpeedScale", "One")
+                    sequence.set("PreferCueAppearance", "No")
+                    sequence.set("ExecutorDisplayMode", "Both")
+                    sequence.set("Action", "Pool Default")
+                    
+                    # Create OffCue
+                    off_cue = SubElement(sequence, "Cue")
+                    off_cue.set("Name", "OffCue")
+                    off_cue.set("Release", "Yes")
+                    off_cue.set("Assert", "Assert")
+                    off_cue.set("AllowDuplicates", "")
+                    off_cue.set("TrigType", "")
+                    
+                    off_part = SubElement(off_cue, "Part")
+                    off_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                    off_part.set("AlignRangeX", "No")
+                    off_part.set("AlignRangeY", "No")
+                    off_part.set("AlignRangeZ", "No")
+                    off_part.set("PreserveGridPositions", "No")
+                    off_part.set("MAgic", "No")
+                    off_part.set("Mode", "0")
+                    off_part.set("Action", "Pool Default")
+                    
+                    # Create CueZero
+                    cue_zero = SubElement(sequence, "Cue")
+                    cue_zero.set("Name", "CueZero")
+                    cue_zero.set("No", "  0")
+                    
+                    cue_zero_part = SubElement(cue_zero, "Part")
+                    cue_zero_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                    cue_zero_part.set("AlignRangeX", "No")
+                    cue_zero_part.set("AlignRangeY", "No")
+                    cue_zero_part.set("AlignRangeZ", "No")
+                    cue_zero_part.set("PreserveGridPositions", "No")
+                    cue_zero_part.set("MAgic", "No")
+                    cue_zero_part.set("Mode", "0")
+                    cue_zero_part.set("Action", "Pool Default")
+                    
+                    # Create Cue 1 with the actual data
+                    cue_one = SubElement(sequence, "Cue")
+                    cue_one.set("No", "  1")
+                    cue_one.set("AllowDuplicates", "")
+                    
+                    cue_one_part = SubElement(cue_one, "Part")
+                    cue_one_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                    cue_one_part.set("AlignRangeX", "No")
+                    cue_one_part.set("AlignRangeY", "No")
+                    cue_one_part.set("AlignRangeZ", "No")
+                    cue_one_part.set("PreserveGridPositions", "No")
+                    cue_one_part.set("MAgic", "No")
+                    cue_one_part.set("Mode", "0")
+                    cue_one_part.set("Action", "Pool Default")
+                    cue_one_part.set("Sync", "")
+                    cue_one_part.set("Morph", "")
+                    
+                    # Create PresetData
+                    preset_data = SubElement(cue_one_part, "PresetData")
+                    preset_data.set("Size", "1")
+                    
+                    # Create Phaser
+                    phaser = SubElement(preset_data, "Phaser")
+                    phaser.set("IDType", "0")
+                    phaser.set("ID", str(fixture.fixture_id))
+                    
+                    # Use activation group prefix if available for both Attribute and Function
+                    activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                    if activation_group:
+                        attribute_name = f"{activation_group}_{attr_name}"
+                    else:
+                        attribute_name = attr_name
+                    
+                    phaser.set("Attribute", attribute_name)
+                    phaser.set("GridPos", "0")
+                    phaser.set("GridPosMatr", "0")
+                    phaser.set("Selective", "true")
+                    
+                    # Create Step with value 100
+                    step = SubElement(phaser, "Step")
+                    step.set("Function", attribute_name)
+                    step.set("Absolute", "100")
+        
+        # Convert to pretty-printed XML string
+        rough_string = tostring(root, encoding='unicode')
+        reparsed = minidom.parseString(rough_string)
+        pretty_xml = reparsed.toprettyxml(indent="    ", encoding=None)
+        
+        # Add proper XML declaration and format
+        lines = pretty_xml.split('\n')
+        # Filter out empty lines and fix formatting
+        filtered_lines = [line for line in lines if line.strip()]
+        
+        # Ensure proper XML declaration
+        if not filtered_lines[0].startswith('<?xml'):
+            filtered_lines.insert(0, '<?xml version="1.0" encoding="UTF-8"?>')
+        
+        return '\n'.join(filtered_lines)
+
+    def _export_ma3_sequences_xml_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]]) -> str:
+        """Export MA3 sequences XML format with per-fixture-type attributes, values set to 100."""
+        import uuid
+        from xml.etree.ElementTree import Element, SubElement, tostring
+        from xml.dom import minidom
+        
+        # Create root element
+        root = Element("GMA3", DataVersion="2.2.5.2")
+        
+        # Sort fixtures by fixture_id in ascending order
+        sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
+                                key=lambda x: x.fixture_id)
+        
+        # Create a sequence for each attribute of each fixture
+        for fixture in sorted_fixtures:
+            fixture_type = fixture.gdtf_spec or "Unknown"
+            # Remove .gdtf extension for consistent naming
+            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+            selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
+            
+            fixture_attributes = [attr for attr in selected_attributes 
+                                if attr in fixture.attribute_offsets]
+            
+            for attr_name in fixture_attributes:
+                sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                if sequence_num:
+                    # Create sequence element
+                    sequence = SubElement(root, "Sequence")
+                    
+                    # Set sequence attributes
+                    sequence_name = f"{fixture.fixture_id}_{attr_name}"
+                    sequence.set("Name", sequence_name)
+                    sequence.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                    sequence.set("AutoStart", "Yes")
+                    sequence.set("AutoStop", "Yes")
+                    sequence.set("AutoFix", "No")
+                    sequence.set("AutoStomp", "No")
+                    sequence.set("SoftLTP", "Yes")
+                    sequence.set("XFadeReload", "No")
+                    sequence.set("SwapProtect", "No")
+                    sequence.set("KillProtect", "No")
+                    sequence.set("UseExecutorTime", "Yes")
+                    sequence.set("OffwhenOverridden", "Yes")
+                    sequence.set("SequMIB", "Enabled")
+                    sequence.set("AutoPrePos", "No")
+                    sequence.set("WrapAround", "Yes")
+                    sequence.set("MasterGoMode", "None")
+                    sequence.set("SpeedfromRate", "No")
+                    sequence.set("Tracking", "Yes")
+                    sequence.set("IncludeLinkLastGo", "Yes")
+                    sequence.set("RateScale", "One")
+                    sequence.set("SpeedScale", "One")
+                    sequence.set("PreferCueAppearance", "No")
+                    sequence.set("ExecutorDisplayMode", "Both")
+                    sequence.set("Action", "Pool Default")
+                    
+                    # Create OffCue
+                    off_cue = SubElement(sequence, "Cue")
+                    off_cue.set("Name", "OffCue")
+                    off_cue.set("Release", "Yes")
+                    off_cue.set("Assert", "Assert")
+                    off_cue.set("AllowDuplicates", "")
+                    off_cue.set("TrigType", "")
+                    
+                    off_part = SubElement(off_cue, "Part")
+                    off_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                    off_part.set("AlignRangeX", "No")
+                    off_part.set("AlignRangeY", "No")
+                    off_part.set("AlignRangeZ", "No")
+                    off_part.set("PreserveGridPositions", "No")
+                    off_part.set("MAgic", "No")
+                    off_part.set("Mode", "0")
+                    off_part.set("Action", "Pool Default")
+                    
+                    # Create CueZero
+                    cue_zero = SubElement(sequence, "Cue")
+                    cue_zero.set("Name", "CueZero")
+                    cue_zero.set("No", "  0")
+                    
+                    cue_zero_part = SubElement(cue_zero, "Part")
+                    cue_zero_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                    cue_zero_part.set("AlignRangeX", "No")
+                    cue_zero_part.set("AlignRangeY", "No")
+                    cue_zero_part.set("AlignRangeZ", "No")
+                    cue_zero_part.set("PreserveGridPositions", "No")
+                    cue_zero_part.set("MAgic", "No")
+                    cue_zero_part.set("Mode", "0")
+                    cue_zero_part.set("Action", "Pool Default")
+                    
+                    # Create Cue 1 with the actual data
+                    cue_one = SubElement(sequence, "Cue")
+                    cue_one.set("No", "  1")
+                    cue_one.set("AllowDuplicates", "")
+                    
+                    cue_one_part = SubElement(cue_one, "Part")
+                    cue_one_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                    cue_one_part.set("AlignRangeX", "No")
+                    cue_one_part.set("AlignRangeY", "No")
+                    cue_one_part.set("AlignRangeZ", "No")
+                    cue_one_part.set("PreserveGridPositions", "No")
+                    cue_one_part.set("MAgic", "No")
+                    cue_one_part.set("Mode", "0")
+                    cue_one_part.set("Action", "Pool Default")
+                    cue_one_part.set("Sync", "")
+                    cue_one_part.set("Morph", "")
+                    
+                    # Create PresetData
+                    preset_data = SubElement(cue_one_part, "PresetData")
+                    preset_data.set("Size", "1")
+                    
+                    # Create Phaser
+                    phaser = SubElement(preset_data, "Phaser")
+                    phaser.set("IDType", "0")
+                    phaser.set("ID", str(fixture.fixture_id))
+                    
+                    # Use activation group prefix if available for both Attribute and Function
+                    activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                    if activation_group:
+                        attribute_name = f"{activation_group}_{attr_name}"
+                    else:
+                        attribute_name = attr_name
+                    
+                    phaser.set("Attribute", attribute_name)
+                    phaser.set("GridPos", "0")
+                    phaser.set("GridPosMatr", "0")
+                    phaser.set("Selective", "true")
+                    
+                    # Create Step with value 100
+                    step = SubElement(phaser, "Step")
+                    step.set("Function", attribute_name)
+                    step.set("Absolute", "100")
+        
+        # Convert to pretty-printed XML string
+        rough_string = tostring(root, encoding='unicode')
+        reparsed = minidom.parseString(rough_string)
+        pretty_xml = reparsed.toprettyxml(indent="    ", encoding=None)
+        
+        # Add proper XML declaration and format
+        lines = pretty_xml.split('\n')
+        # Filter out empty lines and fix formatting
+        filtered_lines = [line for line in lines if line.strip()]
+        
+        # Ensure proper XML declaration
+        if not filtered_lines[0].startswith('<?xml'):
+            filtered_lines.insert(0, '<?xml version="1.0" encoding="UTF-8"?>')
+        
+        return '\n'.join(filtered_lines) 

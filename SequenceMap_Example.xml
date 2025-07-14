@@ -1,8 +1,0 @@
-﻿<?xml version="1.0" encoding="UTF-8"?>
-<GMA3 DataVersion="2.2.5.2">
-    <DmxRemote Name="201_RGBWwCw6 1_B" Guid="63 EC 43 62 7C 55 46 27 93 36 97 B7 CD 3A A7 79" Target="ShowData.DataPools.Default.Sequences.2" TriggerOn="FFFFFF" TriggerOff="000000" InFrom="000000" InTo="FFFFFF" OutFrom="   0.0" OutTo=" 100.0" Address="201.003" Resolution="16bit" />
-    <DmxRemote Name="201_RGBWwCw6 1_G" Guid="88 4A 89 29 C4 CF 45 30 B9 2F 12 3B B5 38 74 88" Target="ShowData.DataPools.Default.Sequences.3" TriggerOn="FFFFFF" TriggerOff="000000" InFrom="000000" InTo="FFFFFF" OutFrom="   0.0" OutTo=" 100.0" Address="201.002" Resolution="16bit" />
-    <DmxRemote Name="201_RGBWwCw6 1_R" Guid="74 25 B0 67 31 F5 42 CB 84 74 63 66 0F 83 C6 69" Target="ShowData.DataPools.Default.Sequences.4" TriggerOn="FFFFFF" TriggerOff="000000" InFrom="000000" InTo="FFFFFF" OutFrom="   0.0" OutTo=" 100.0" Address="201.001" Resolution="16bit" />
-    <DmxRemote Name="201_RGBWwCw6 1_WW" Guid="E2 27 DD F4 93 F5 4D 26 A0 B5 D0 86 31 B4 EE AF" Target="ShowData.DataPools.Default.Sequences.5" TriggerOn="FFFFFF" TriggerOff="000000" InFrom="000000" InTo="FFFFFF" OutFrom="   0.0" OutTo=" 100.0" Address="201.004" Resolution="16bit" />
-    <DmxRemote Name="201_RGBWwCw6 1_White" Guid="0E E5 6B 30 D8 25 43 92 A3 04 15 1A EA DE 3C 56" Target="ShowData.DataPools.Default.Sequences.6" TriggerOn="FFFFFF" TriggerOff="000000" InFrom="000000" InTo="FFFFFF" OutFrom="   0.0" OutTo=" 100.0" Address="201.005" Resolution="16bit" />
-</GMA3>

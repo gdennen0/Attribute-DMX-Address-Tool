@@ -1383,3 +1383,57 @@ class MVRController:
             import traceback
             traceback.print_exc()
             return {"success": False, "error": str(e)}
+
+    def export_sequences_xml(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], file_path: str) -> Dict[str, Any]:
+        """
+        Export MA3 sequences XML for all fixtures and their attributes with values set to 100.
+        
+        Args:
+            fixtures: List of FixtureMatch objects with sequence numbers assigned
+            fixture_type_attributes: Dict mapping fixture types to their selected attributes
+            file_path: Path to save the sequences XML file
+            
+        Returns:
+            Dict containing export results
+        """
+        try:
+            if not fixtures:
+                return {"success": False, "error": "No fixtures provided"}
+            
+            if not fixture_type_attributes:
+                return {"success": False, "error": "No fixture type attributes provided"}
+            
+            # Export sequences using the service
+            export_data = self.mvr_service._export_ma3_sequences_xml_by_type(fixtures, fixture_type_attributes)
+            
+            # Save to file
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(export_data)
+            except Exception as e:
+                return {"success": False, "error": f"Error saving file: {e}"}
+            
+            # Count sequences generated
+            sequence_count = 0
+            for fixture in fixtures:
+                if fixture.is_matched():
+                    fixture_type = fixture.gdtf_spec or "Unknown"
+                    fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+                    selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
+                    
+                    for attr_name in selected_attributes:
+                        if attr_name in fixture.attribute_offsets and fixture.get_sequence_for_attribute(attr_name):
+                            sequence_count += 1
+            
+            return {
+                "success": True,
+                "file_path": file_path,
+                "export_data": export_data,
+                "sequence_count": sequence_count,
+                "message": f"Successfully exported {sequence_count} sequences to {file_path}"
+            }
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}

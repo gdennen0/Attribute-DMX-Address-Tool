@@ -77,7 +77,7 @@
     "Zoom",
     "Zoom MSpeed"
   ],
-  "output_format": "csv",
+  "output_format": "ma3_sequences",
   "save_results": true,
   "output_directory": "output",
   "last_mvr_directory": "/Users/gdennen/Desktop",

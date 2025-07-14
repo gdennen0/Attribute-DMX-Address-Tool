@@ -2057,7 +2057,7 @@ class MVRApp(QMainWindow):
         export_layout.addWidget(format_label)
         
         self.format_combo = QComboBox()
-        self.format_combo.addItems(["ma3_xml", "csv", "json"])
+        self.format_combo.addItems(["ma3_xml", "ma3_sequences", "csv", "json"])
         self.format_combo.setCurrentText("ma3_xml")
         self.format_combo.currentTextChanged.connect(self.on_format_changed)
         export_layout.addWidget(self.format_combo)
@@ -3508,7 +3508,7 @@ class MVRApp(QMainWindow):
     
     def on_format_changed(self, format_name: str):
         """Handle output format change."""
-        # Show/hide MA3 XML configuration button
+        # Show/hide MA3 XML configuration button (only needed for DMX remotes, not sequences)
         self.ma3_config_btn.setVisible(format_name == "ma3_xml")
         
         # If switching to MA3 XML and no config exists, load from saved config
@@ -4142,7 +4142,8 @@ class MVRApp(QMainWindow):
                 "text": "txt",
                 "csv": "csv", 
                 "json": "json",
-                "ma3_xml": "xml"
+                "ma3_xml": "xml",
+                "ma3_sequences": "xml"
             }
             ext = extensions.get(output_format, "txt")
             
