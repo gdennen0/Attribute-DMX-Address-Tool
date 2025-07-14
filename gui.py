@@ -30,6 +30,7 @@ from views.fixture_attribute_dialog import FixtureAttributeDialog
 from views.ma3_xml_dialog import MA3XMLDialog
 from views.csv_import_dialog import CSVImportDialog
 from views.mvr_import_dialog import MVRImportDialog
+from views.settings_dialog import SettingsDialog
 
 
 class DragDropIndicator(QWidget):
@@ -75,9 +76,25 @@ class DragDropItemModel(QStandardItemModel):
         return ["application/x-qabstractitemmodeldatalist"]
 
 class DraggableTableView(QTableView):
-    """Custom QTableView with enhanced drag and drop functionality."""
+    """Custom QTableView with enhanced drag and drop functionality including multi-row selection.
     
-    rowMoved = pyqtSignal(int, int)  # from_row, to_row
+    Features:
+    - Multi-row selection using Ctrl+Click, Shift+Click, or click-and-drag
+    - Drag and drop multiple selected rows while maintaining their relative order
+    - Keyboard shortcuts: Ctrl+A (select all), Delete (delete selected rows)
+    - Context menu with operations for single or multiple rows
+    - Visual feedback during drag operations showing number of rows being moved
+    - Backward compatibility with single-row operations
+    
+    Signals:
+    - rowMoved(int, int): Emitted for single row moves (backward compatibility)
+    - rowsMoved(list, int): Emitted for multi-row moves with selected_rows and target_row
+    - rowInserted(int): Emitted when a row is inserted
+    - rowDeleted(int): Emitted when a row is deleted
+    """
+    
+    rowMoved = pyqtSignal(int, int)  # from_row, to_row (for single row - backward compatibility)
+    rowsMoved = pyqtSignal(list, int)  # selected_rows, target_row (for multi-row moves)
     rowInserted = pyqtSignal(int)    # row_index
     rowDeleted = pyqtSignal(int)     # row_index
     
@@ -88,7 +105,7 @@ class DraggableTableView(QTableView):
         
         # Visual feedback for drag operations
         self.drag_indicator = DragDropIndicator(self)
-        self.drag_start_row = -1
+        self.drag_start_rows = []  # List of selected rows being dragged
         
     def setup_drag_drop(self):
         """Configure drag and drop settings."""
@@ -96,26 +113,37 @@ class DraggableTableView(QTableView):
         self.setDragDropOverwriteMode(False)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)  # Enable multi-selection
         
     def setup_context_menu(self):
         """Setup context menu for row operations."""
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
     
+    def get_selected_rows(self):
+        """Get a sorted list of currently selected row indices."""
+        selected_rows = []
+        for index in self.selectedIndexes():
+            row = index.row()
+            if row not in selected_rows:
+                selected_rows.append(row)
+        return sorted(selected_rows)
+    
     def startDrag(self, supportedActions):
-        """Start drag operation with visual feedback."""
+        """Start drag operation with visual feedback for single or multiple rows."""
         selected_indexes = self.selectedIndexes()
         if not selected_indexes:
             return
-            
-        # Get the first selected row
-        self.drag_start_row = selected_indexes[0].row()
         
+        # Get all selected rows
+        self.drag_start_rows = self.get_selected_rows()
+        if not self.drag_start_rows:
+            return
+            
         # Create drag object
         drag = QDrag(self)
         
-        # Create mime data
+        # Create mime data for all selected rows
         mime_data = self.model().mimeData(selected_indexes)
         drag.setMimeData(mime_data)
         
@@ -127,32 +155,50 @@ class DraggableTableView(QTableView):
         result = drag.exec(Qt.DropAction.MoveAction)
         
         # Clean up
-        self.drag_start_row = -1
+        self.drag_start_rows = []
         self.drag_indicator.hide()
     
     def create_drag_pixmap(self):
-        """Create a visual representation of the dragged row."""
-        if self.drag_start_row < 0:
+        """Create a visual representation of the dragged rows."""
+        if not self.drag_start_rows:
             return QPixmap()
         
-        from PyQt6.QtGui import QPainter, QColor
+        from PyQt6.QtGui import QPainter, QColor, QFont
         
         try:
-            # Get the visual rect of the first column to determine row height
-            first_index = self.model().index(self.drag_start_row, 0)
-            first_rect = self.visualRect(first_index)
+            # Calculate dimensions for multi-row pixmap
+            if len(self.drag_start_rows) == 1:
+                # Single row - use original height
+                first_index = self.model().index(self.drag_start_rows[0], 0)
+                first_rect = self.visualRect(first_index)
+                pixmap_height = first_rect.height()
+            else:
+                # Multiple rows - use condensed representation
+                single_row_height = 20  # Condensed height per row
+                pixmap_height = min(len(self.drag_start_rows) * single_row_height + 10, 120)  # Cap at 120px
             
-            # Create a simple pixmap representing the dragged row
-            pixmap = QPixmap(self.width(), first_rect.height())
+            pixmap_width = min(self.width(), 300)  # Cap width at 300px
+            
+            # Create pixmap
+            pixmap = QPixmap(pixmap_width, pixmap_height)
             pixmap.fill(QColor(100, 100, 100, 180))  # Semi-transparent gray
             
-            # Create a painter for styling
+            # Create painter for styling
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             
-            # Draw a border to make it look like a dragged item
+            # Draw border
             painter.setPen(QColor(50, 50, 50))
             painter.drawRect(pixmap.rect().adjusted(0, 0, -1, -1))
+            
+            # Add text indicating number of rows
+            if len(self.drag_start_rows) > 1:
+                painter.setPen(QColor(255, 255, 255))
+                font = QFont()
+                font.setBold(True)
+                painter.setFont(font)
+                text = f"{len(self.drag_start_rows)} rows"
+                painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, text)
             
             painter.end()
             
@@ -211,7 +257,7 @@ class DraggableTableView(QTableView):
         event.accept()
     
     def dropEvent(self, event):
-        """Handle drop events."""
+        """Handle drop events for single or multiple rows."""
         if event.source() != self:
             event.ignore()
             return
@@ -233,17 +279,35 @@ class DraggableTableView(QTableView):
         else:
             target_row = self.model().rowCount()
         
-        # Don't drop on the same position
-        if target_row == self.drag_start_row or target_row == self.drag_start_row + 1:
-            event.ignore()
-            return
-            
-        # Perform the actual drop
-        if self.perform_row_move(self.drag_start_row, target_row):
-            event.acceptProposedAction()
-            self.rowMoved.emit(self.drag_start_row, target_row)
+        # Handle multiple row selection
+        if len(self.drag_start_rows) > 1:
+            # Don't drop on any of the selected rows or immediately after the last one
+            if target_row in self.drag_start_rows or target_row == max(self.drag_start_rows) + 1:
+                event.ignore()
+                return
+                
+            # Perform multi-row move
+            if self.perform_multi_row_move(self.drag_start_rows, target_row):
+                event.acceptProposedAction()
+                self.rowsMoved.emit(self.drag_start_rows, target_row)
+            else:
+                event.ignore()
         else:
-            event.ignore()
+            # Single row handling (backward compatibility)
+            single_row = self.drag_start_rows[0] if self.drag_start_rows else -1
+            
+            # Don't drop on the same position
+            if target_row == single_row or target_row == single_row + 1:
+                event.ignore()
+                return
+                
+            # Perform single row move
+            if self.perform_row_move(single_row, target_row):
+                event.acceptProposedAction()
+                self.rowMoved.emit(single_row, target_row)  # Emit old signal for compatibility
+                self.rowsMoved.emit([single_row], target_row)  # Also emit new signal
+            else:
+                event.ignore()
     
     def position_drop_indicator(self, row):
         """Position the visual drop indicator."""
@@ -265,68 +329,110 @@ class DraggableTableView(QTableView):
         self.drag_indicator.setGeometry(0, y, self.width(), 2)
         self.drag_indicator.show()
     
-    def perform_row_move(self, from_row, to_row):
-        """Perform the actual row move operation."""
-        if from_row == to_row:
+    def perform_multi_row_move(self, source_rows, target_row):
+        """Perform the actual multi-row move operation while maintaining relative order."""
+        if not source_rows or target_row in source_rows:
             return False
-            
+        
         model = self.model()
         
-        # Take the entire row
-        source_items = []
-        for col in range(model.columnCount()):
-            item = model.takeItem(from_row, col)
-            source_items.append(item)
+        # Store all row data first
+        rows_data = []
+        for row in sorted(source_rows, reverse=True):  # Process in reverse order to maintain indices
+            row_items = []
+            for col in range(model.columnCount()):
+                item = model.takeItem(row, col)
+                row_items.append(item)
+            rows_data.append(row_items)
+            model.removeRow(row)
         
-        # Remove the source row
-        model.removeRow(from_row)
+        # Reverse the data to maintain original order
+        rows_data.reverse()
         
-        # Adjust target position if needed
-        if to_row > from_row:
-            to_row -= 1
+        # Adjust target position based on how many rows were removed before it
+        adjusted_target = target_row
+        for row in source_rows:
+            if row < target_row:
+                adjusted_target -= 1
         
-        # Insert new row at target position
-        model.insertRow(to_row)
+        # Insert all rows at the target position
+        for i, row_items in enumerate(rows_data):
+            insert_position = adjusted_target + i
+            model.insertRow(insert_position)
+            
+            # Place items in the new row
+            for col, item in enumerate(row_items):
+                if item is not None:
+                    # Special handling for routing column (column 5 or 8 depending on table)
+                    if col in [5, 8]:  # Both possible routing columns
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    model.setItem(insert_position, col, item)
+                else:
+                    # Create empty item if none existed
+                    new_item = QStandardItem("")
+                    if col in [5, 8]:  # Routing columns
+                        new_item.setFlags(new_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    model.setItem(insert_position, col, new_item)
         
-        # Place items in the new row
-        for col, item in enumerate(source_items):
-            if item is not None:
-                # Special handling for routing column (column 5)
-                if col == 5:
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                model.setItem(to_row, col, item)
-            else:
-                # Create empty item if none existed
-                new_item = QStandardItem("")
-                if col == 5:  # Routing column
-                    new_item.setFlags(new_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                model.setItem(to_row, col, new_item)
-        
-        # Select the moved row
-        self.selectRow(to_row)
+        # Select the moved rows at their new positions
+        selection_model = self.selectionModel()
+        selection_model.clearSelection()
+        for i in range(len(rows_data)):
+            new_row = adjusted_target + i
+            selection_model.select(
+                model.index(new_row, 0),
+                selection_model.SelectionFlag.Select | selection_model.SelectionFlag.Rows
+            )
         
         return True
     
     def show_context_menu(self, position):
-        """Show context menu with row operations."""
+        """Show context menu with row operations for single or multiple rows."""
         if not self.indexAt(position).isValid():
             return
         
+        selected_rows = self.get_selected_rows()
         menu = QMenu(self)
         
-        # Add row operations
-        insert_above_action = menu.addAction("Insert Empty Row Above")
-        insert_below_action = menu.addAction("Insert Empty Row Below")
-        menu.addSeparator()
-        delete_row_action = menu.addAction("Delete Row")
-        
-        # Connect actions
-        insert_above_action.triggered.connect(self.insert_empty_row_above)
-        insert_below_action.triggered.connect(self.insert_empty_row_below)
-        delete_row_action.triggered.connect(self.delete_current_row)
+        if len(selected_rows) <= 1:
+            # Single row operations
+            insert_above_action = menu.addAction("Insert Empty Row Above")
+            insert_below_action = menu.addAction("Insert Empty Row Below")
+            menu.addSeparator()
+            delete_row_action = menu.addAction("Delete Row")
+            
+            # Connect actions
+            insert_above_action.triggered.connect(self.insert_empty_row_above)
+            insert_below_action.triggered.connect(self.insert_empty_row_below)
+            delete_row_action.triggered.connect(self.delete_current_row)
+        else:
+            # Multi-row operations
+            menu.addAction(f"Selected: {len(selected_rows)} rows").setEnabled(False)
+            menu.addSeparator()
+            
+            insert_above_action = menu.addAction("Insert Empty Row Above Selection")
+            insert_below_action = menu.addAction("Insert Empty Row Below Selection")
+            menu.addSeparator()
+            delete_rows_action = menu.addAction(f"Delete {len(selected_rows)} Selected Rows")
+            
+            # Connect actions for multi-row operations
+            insert_above_action.triggered.connect(lambda: self.insert_empty_row_at(min(selected_rows)))
+            insert_below_action.triggered.connect(lambda: self.insert_empty_row_at(max(selected_rows) + 1))
+            delete_rows_action.triggered.connect(self.delete_selected_rows)
         
         # Show menu
         menu.exec(self.mapToGlobal(position))
+    
+    def delete_selected_rows(self):
+        """Delete all currently selected rows."""
+        selected_rows = self.get_selected_rows()
+        if not selected_rows:
+            return
+        
+        # Remove rows in reverse order to maintain correct indices
+        for row in sorted(selected_rows, reverse=True):
+            self.model().removeRow(row)
+            self.rowDeleted.emit(row)
     
     def insert_empty_row_above(self):
         """Insert an empty row above the current selection."""
@@ -364,6 +470,27 @@ class DraggableTableView(QTableView):
             self.model().removeRow(current_row)
             self.rowDeleted.emit(current_row)
     
+    def keyPressEvent(self, event):
+        """Handle keyboard events for enhanced multi-selection."""
+        if event.key() == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            # Ctrl+A - select all rows
+            self.selectAll()
+            event.accept()
+            return
+        elif event.key() == Qt.Key.Key_Delete:
+            # Delete key - delete selected rows
+            selected_rows = self.get_selected_rows()
+            if selected_rows:
+                if len(selected_rows) == 1:
+                    self.delete_current_row()
+                else:
+                    self.delete_selected_rows()
+                event.accept()
+                return
+        
+        # Call parent implementation for other keys
+        super().keyPressEvent(event)
+    
     def resizeEvent(self, event):
         """Handle resize events."""
         super().resizeEvent(event)
@@ -395,6 +522,7 @@ class DraggableTableWidget(DraggableTableView):
         
         # Connect signals to match the old interface
         self.rowMoved.connect(self.on_row_moved)
+        self.rowsMoved.connect(self.on_rows_moved)  # New multi-row signal
         self.rowInserted.connect(self.on_row_inserted)
         self.rowDeleted.connect(self.on_row_deleted)
         
@@ -405,6 +533,11 @@ class DraggableTableWidget(DraggableTableView):
         """Handle row moved events."""
         if hasattr(self.parent(), 'on_row_moved'):
             self.parent().on_row_moved(from_row, to_row)
+    
+    def on_rows_moved(self, selected_rows, target_row):
+        """Handle multiple rows moved events."""
+        if hasattr(self.parent(), 'on_rows_moved'):
+            self.parent().on_rows_moved(selected_rows, target_row)
     
     def on_row_inserted(self, row):
         """Handle row inserted events."""
@@ -460,13 +593,31 @@ class DraggableTableWidget(DraggableTableView):
         return self.item_model.insertRow(row)
     
     def selectRow(self, row):
-        """Select a row."""
+        """Select a single row."""
         selection_model = self.selectionModel()
         selection_model.clearSelection()
         selection_model.select(
             self.item_model.index(row, 0),
             selection_model.SelectionFlag.SelectCurrent | selection_model.SelectionFlag.Rows
         )
+    
+    def selectRows(self, rows):
+        """Select multiple rows."""
+        if not rows:
+            return
+        
+        selection_model = self.selectionModel()
+        selection_model.clearSelection()
+        
+        for row in rows:
+            selection_model.select(
+                self.item_model.index(row, 0),
+                selection_model.SelectionFlag.Select | selection_model.SelectionFlag.Rows
+            )
+    
+    def getSelectedRows(self):
+        """Get list of currently selected row indices (for backward compatibility)."""
+        return self.get_selected_rows() if hasattr(self, 'get_selected_rows') else []
     
     def currentRow(self):
         """Get the current row."""
@@ -521,18 +672,19 @@ class MasterAnalysisWorker(QThread):
     analysis_complete = pyqtSignal(dict)
     analysis_error = pyqtSignal(str)
     
-    def __init__(self, controller: MVRController, fixture_type_attributes: Dict[str, List[str]], output_format: str, ma3_config: dict = None):
+    def __init__(self, controller: MVRController, fixture_type_attributes: Dict[str, List[str]], output_format: str, ma3_config: dict = None, sequence_start: int = 1):
         super().__init__()
         self.controller = controller
         self.fixture_type_attributes = fixture_type_attributes
         self.output_format = output_format
         self.ma3_config = ma3_config
+        self.sequence_start = sequence_start
     
     def run(self):
         """Run the master analysis in background thread."""
         try:
             self.progress_update.emit("Analyzing master fixtures...")
-            result = self.controller.analyze_master_fixtures(self.fixture_type_attributes, self.output_format, self.ma3_config)
+            result = self.controller.analyze_master_fixtures(self.fixture_type_attributes, self.output_format, self.ma3_config, self.sequence_start)
             
             if result["success"]:
                 self.analysis_complete.emit(result)
@@ -550,18 +702,19 @@ class RemoteAnalysisWorker(QThread):
     analysis_complete = pyqtSignal(dict)
     analysis_error = pyqtSignal(str)
     
-    def __init__(self, controller: MVRController, fixture_type_attributes: Dict[str, List[str]], output_format: str, ma3_config: dict = None):
+    def __init__(self, controller: MVRController, fixture_type_attributes: Dict[str, List[str]], output_format: str, ma3_config: dict = None, sequence_start: int = 1):
         super().__init__()
         self.controller = controller
         self.fixture_type_attributes = fixture_type_attributes
         self.output_format = output_format
         self.ma3_config = ma3_config
+        self.sequence_start = sequence_start
     
     def run(self):
         """Run the remote analysis in background thread."""
         try:
             self.progress_update.emit("Analyzing remote fixtures...")
-            result = self.controller.analyze_remote_fixtures(self.fixture_type_attributes, self.output_format, self.ma3_config)
+            result = self.controller.analyze_remote_fixtures(self.fixture_type_attributes, self.output_format, self.ma3_config, self.sequence_start)
             
             if result["success"]:
                 self.analysis_complete.emit(result)
@@ -577,30 +730,37 @@ class MVRApp(QMainWindow):
     
     def __init__(self):
         super().__init__()
+        
+        # Initialize controller
         self.controller = MVRController()
         self.config = Config()
         
-        # Master fixtures data
-        self.master_results = None
+        # Analysis workers
+        self.worker = None
         self.master_worker = None
-        self.master_fixture_type_attributes = {}
-        
-        # Remote fixtures data  
-        self.remote_results = None
         self.remote_worker = None
+        
+        # MA3 XML configuration
+        self.ma3_config = None
+        
+        # Results storage
+        self.current_results = None
+        self.master_results = None
+        self.remote_results = None
+        
+        # Project management
+        self.current_project_path = None
+        self.project_dirty = False
+        
+        # Fixture type attributes per dataset
+        self.fixture_type_attributes = {}  # Legacy
+        self.master_fixture_type_attributes = {}
         self.remote_fixture_type_attributes = {}
         
-        # Alignment data
-        self.alignment_results = None
-        
-        # Shared data
-        self.ma3_config = None  # Store MA3 configuration
-        self.current_project_path = None  # Current project file path
-        self.project_dirty = False  # Whether project has unsaved changes
-        
-        # Legacy single-dataset support (for backward compatibility)
-        self.fixture_type_attributes = {}
-        self.current_results = None
+        # Table ordering state - preserves user's custom row order
+        self.master_table_order = []  # List of (fixture_id, attribute_name) tuples in display order
+        self.remote_table_order = []  # List of (fixture_id, attribute_name) tuples in display order
+        self.table_population_in_progress = False  # Flag to prevent recursive updates
         
         self.setup_ui()
         self.update_ui_state()
@@ -777,6 +937,14 @@ class MVRApp(QMainWindow):
         exit_action.setShortcut('Ctrl+Q')
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+        
+        # Tools menu
+        tools_menu = menubar.addMenu('Tools')
+        
+        # Settings
+        settings_action = QAction('Settings...', self)
+        settings_action.triggered.connect(self.show_settings)
+        tools_menu.addAction(settings_action)
     
     def create_control_sections(self) -> List[QWidget]:
         """Create all control sections as separate group boxes."""
@@ -1332,13 +1500,15 @@ class MVRApp(QMainWindow):
         # Get output format and MA3 config
         output_format = self.format_combo.currentText()
         ma3_config = self.ma3_config if output_format == "ma3_xml" else None
+        sequence_start = self.config.get_sequence_start_number()
         
         # Start analysis worker
         self.master_worker = MasterAnalysisWorker(
             self.controller, 
             self.master_fixture_type_attributes, 
             output_format, 
-            ma3_config
+            ma3_config,
+            sequence_start
         )
         
         self.master_worker.progress_update.connect(self.update_progress)
@@ -1360,13 +1530,15 @@ class MVRApp(QMainWindow):
         # Get output format and MA3 config
         output_format = self.format_combo.currentText()
         ma3_config = self.ma3_config if output_format == "ma3_xml" else None
+        sequence_start = self.config.get_sequence_start_number()
         
         # Start analysis worker
         self.remote_worker = RemoteAnalysisWorker(
             self.controller, 
             self.remote_fixture_type_attributes, 
             output_format, 
-            ma3_config
+            ma3_config,
+            sequence_start
         )
         
         self.remote_worker.progress_update.connect(self.update_progress)
@@ -1922,7 +2094,7 @@ class MVRApp(QMainWindow):
         
         # Results tree
         self.master_results_tree = QTreeWidget()
-        self.master_results_tree.setHeaderLabels(["Fixture/Attribute", "Type", "GDTF Profile", "Base Address", "Mode", "Universe", "Channel", "Absolute"])
+        self.master_results_tree.setHeaderLabels(["Fixture/Attribute", "Type", "GDTF Profile", "Base Address", "Mode", "ActivationGroup", "Sequence", "Universe", "Channel", "Absolute"])
         self.master_results_tree.setAlternatingRowColors(True)
         self.master_results_tree.setRootIsDecorated(True)
         results_layout.addWidget(self.master_results_tree)
@@ -1944,7 +2116,7 @@ class MVRApp(QMainWindow):
         
         # Results tree
         self.remote_results_tree = QTreeWidget()
-        self.remote_results_tree.setHeaderLabels(["Fixture/Attribute", "Type", "GDTF Profile", "Base Address", "Mode", "Universe", "Channel", "Absolute"])
+        self.remote_results_tree.setHeaderLabels(["Fixture/Attribute", "Type", "GDTF Profile", "Base Address", "Mode", "ActivationGroup", "Sequence", "Universe", "Channel", "Absolute"])
         self.remote_results_tree.setAlternatingRowColors(True)
         self.remote_results_tree.setRootIsDecorated(True)
         results_layout.addWidget(self.remote_results_tree)
@@ -1990,6 +2162,13 @@ class MVRApp(QMainWindow):
         self.clear_alignment_btn.clicked.connect(self.clear_alignment)
         button_layout.addWidget(self.clear_alignment_btn)
         
+        # Add sequence assignment button
+        self.assign_sequences_btn = QPushButton("Assign Sequences")
+        self.assign_sequences_btn.setEnabled(False)
+        self.assign_sequences_btn.setToolTip("Assign sequence numbers from master to remote fixtures based on row position")
+        self.assign_sequences_btn.clicked.connect(self.assign_sequences_by_row)
+        button_layout.addWidget(self.assign_sequences_btn)
+        
         button_layout.addStretch()
         
         control_layout.addLayout(button_layout)
@@ -1998,35 +2177,41 @@ class MVRApp(QMainWindow):
     
     def create_alignment_results_section(self) -> QWidget:
         """Create the routing section with side-by-side tables."""
-        results_group = QGroupBox("Fixture Routing")
+        results_group = QGroupBox("Attribute Routing")
         results_layout = QVBoxLayout(results_group)
         
         # Results status
-        self.alignment_results_status = QLabel("Load Master and Remote fixtures to begin routing")
+        self.alignment_results_status = QLabel("Load Master and Remote fixtures to begin attribute routing")
         self.alignment_results_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
         results_layout.addWidget(self.alignment_results_status)
         
         # Create horizontal layout for side-by-side tables
         tables_layout = QHBoxLayout()
         
-        # Master fixtures table
-        master_group = QGroupBox("Master Fixtures")
+        # Master attributes table
+        master_group = QGroupBox("Master Attributes")
         master_layout = QVBoxLayout(master_group)
         
         self.master_fixtures_table = DraggableTableWidget()
-        self.master_fixtures_table.setColumnCount(6)
-        self.master_fixtures_table.setHorizontalHeaderLabels(["ID", "Name", "Type", "Mode", "Base Address", "Routing"])
+        self.master_fixtures_table.setColumnCount(9)
+        self.master_fixtures_table.setHorizontalHeaderLabels([
+            "Fixture ID", "Fixture Name", "Attribute", "Sequence", 
+            "ActivationGroup", "Universe", "Channel", "Absolute", "Routing"
+        ])
         self.master_fixtures_table.setAlternatingRowColors(True)
         self.master_fixtures_table.itemSelectionChanged.connect(self.on_master_selection_changed)
         master_layout.addWidget(self.master_fixtures_table)
         
-        # Remote fixtures table
-        remote_group = QGroupBox("Remote Fixtures")
+        # Remote attributes table
+        remote_group = QGroupBox("Remote Attributes")
         remote_layout = QVBoxLayout(remote_group)
         
         self.remote_fixtures_table = DraggableTableWidget()
-        self.remote_fixtures_table.setColumnCount(6)
-        self.remote_fixtures_table.setHorizontalHeaderLabels(["ID", "Name", "Type", "Mode", "Base Address", "Routing"])
+        self.remote_fixtures_table.setColumnCount(9)
+        self.remote_fixtures_table.setHorizontalHeaderLabels([
+            "Fixture ID", "Fixture Name", "Attribute", "Sequence", 
+            "ActivationGroup", "Universe", "Channel", "Absolute", "Routing"
+        ])
         self.remote_fixtures_table.setAlternatingRowColors(True)
         self.remote_fixtures_table.itemSelectionChanged.connect(self.on_remote_selection_changed)
         remote_layout.addWidget(self.remote_fixtures_table)
@@ -2116,10 +2301,13 @@ class MVRApp(QMainWindow):
                 matched_count = result["matched_count"]
                 total_master = len(self.controller.master_matched_fixtures)
                 alignment_percentage = result["alignment_percentage"]
+                sequence_assignments = result.get("sequence_assignments", 0)
                 
-                self.alignment_status.setText(
-                    f"✓ Auto-alignment complete: {matched_count}/{total_master} fixtures matched ({alignment_percentage:.1f}%)"
-                )
+                status_text = f"✓ Auto-alignment complete: {matched_count}/{total_master} fixtures matched ({alignment_percentage:.1f}%)"
+                if sequence_assignments > 0:
+                    status_text += f", {sequence_assignments} sequences assigned"
+                
+                self.alignment_status.setText(status_text)
                 self.alignment_status.setStyleSheet("color: green; font-weight: bold; padding: 10px;")
                 
                 # Enable clear button
@@ -2128,7 +2316,10 @@ class MVRApp(QMainWindow):
                 # Mark project as dirty
                 self.mark_project_dirty()
                 
-                self.status_bar.showMessage(f"Auto-alignment complete: {matched_count} fixtures matched")
+                status_msg = f"Auto-alignment complete: {matched_count} fixtures matched"
+                if sequence_assignments > 0:
+                    status_msg += f", {sequence_assignments} sequences assigned"
+                self.status_bar.showMessage(status_msg)
                 
             else:
                 QMessageBox.critical(self, "Alignment Error", f"Failed to align fixtures:\n{result['error']}")
@@ -2147,7 +2338,7 @@ class MVRApp(QMainWindow):
             self._populate_alignment_tables()
             
             # Reset alignment status
-            self.alignment_status.setText("Load Master and Remote fixtures to begin alignment")
+            self.alignment_status.setText("Load Master and Remote fixtures to begin attribute alignment")
             self.alignment_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
             
             # Disable clear button
@@ -2196,7 +2387,7 @@ class MVRApp(QMainWindow):
             # Mark project as dirty
             self.mark_project_dirty()
             
-            self.status_bar.showMessage(f"Paired master fixture {master_id} with remote fixture {remote_id}")
+            self.status_bar.showMessage(f"Paired master fixture {master_id} with remote fixture {remote_id} (sequences assigned automatically)")
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error pairing fixtures:\n{str(e)}")
@@ -2255,9 +2446,113 @@ class MVRApp(QMainWindow):
         self.pair_btn.setEnabled(has_master and has_remote)
         self.unpair_btn.setEnabled(has_master)
     
-    def _populate_alignment_tables(self):
-        """Populate the master and remote fixture tables."""
+    def assign_sequences_by_row(self):
+        """Assign sequence numbers from master table rows to corresponding remote table rows."""
         try:
+            if not hasattr(self, 'master_fixtures_table') or not hasattr(self, 'remote_fixtures_table'):
+                QMessageBox.warning(self, "Tables Not Ready", "Master and remote tables are not available.")
+                return
+                
+            # Check if we have both master and remote data
+            if not hasattr(self, 'master_results') or self.master_results is None:
+                QMessageBox.warning(self, "No Master Data", "Please load and analyze master fixtures first.")
+                return
+                
+            if not hasattr(self, 'remote_results') or self.remote_results is None:
+                QMessageBox.warning(self, "No Remote Data", "Please load and analyze remote fixtures first.")
+                return
+            
+            master_row_count = self.master_fixtures_table.rowCount()
+            remote_row_count = self.remote_fixtures_table.rowCount()
+            
+            if master_row_count == 0:
+                QMessageBox.warning(self, "No Master Rows", "No master fixture attributes found.")
+                return
+                
+            if remote_row_count == 0:
+                QMessageBox.warning(self, "No Remote Rows", "No remote fixture attributes found.")
+                return
+            
+            # Ask user for confirmation
+            msg = f"This will assign sequence numbers from {master_row_count} master rows to {remote_row_count} remote rows.\n\n"
+            msg += "Row 1 master sequence → Row 1 remote sequence\n"
+            msg += "Row 2 master sequence → Row 2 remote sequence\n"
+            msg += "etc.\n\n"
+            if master_row_count != remote_row_count:
+                msg += f"Note: Row counts differ ({master_row_count} master vs {remote_row_count} remote).\n"
+                msg += "Only matching rows will be processed.\n\n"
+            msg += "Continue?"
+            
+            reply = QMessageBox.question(self, "Assign Sequences", msg, 
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            
+            # Save current table order to preserve it
+            self._save_current_table_order()
+            
+            # First, ensure backend data is in sync with current table order
+            self._update_fixture_order_from_tables()
+            
+            # Transfer sequences row by row
+            sequences_assigned = 0
+            max_rows = min(master_row_count, remote_row_count)
+            
+            for row in range(max_rows):
+                # Get sequence from master row
+                master_seq_item = self.master_fixtures_table.item(row, 3)  # Sequence column is index 3
+                if master_seq_item:
+                    master_sequence = master_seq_item.text()
+                    if master_sequence and master_sequence != "—" and master_sequence != "":
+                        # Update remote row sequence
+                        remote_seq_item = self.remote_fixtures_table.item(row, 3)
+                        if remote_seq_item:
+                            remote_seq_item.setText(master_sequence)
+                            sequences_assigned += 1
+                        
+                        # Also update the underlying fixture data
+                        remote_fixture_id_item = self.remote_fixtures_table.item(row, 0)
+                        remote_attr_item = self.remote_fixtures_table.item(row, 2)
+                        if remote_fixture_id_item and remote_attr_item:
+                            fixture_id = int(remote_fixture_id_item.text())
+                            attr_name = remote_attr_item.text()
+                            
+                            # Find the fixture in remote_matched_fixtures and update sequence
+                            for fixture in self.controller.remote_matched_fixtures:
+                                if fixture.fixture_id == fixture_id:
+                                    if not hasattr(fixture, 'attribute_sequences') or fixture.attribute_sequences is None:
+                                        fixture.attribute_sequences = {}
+                                    fixture.attribute_sequences[attr_name] = int(master_sequence)
+                                    break
+            
+            # Update sequence display in tables without rebuilding them
+            self._update_sequences_in_place()
+            
+            # Update the status and mark project as dirty
+            self.status_bar.showMessage(f"Assigned {sequences_assigned} sequence numbers from master to remote fixtures")
+            self.mark_project_dirty()
+            
+            # Show completion message
+            QMessageBox.information(self, "Sequences Assigned", 
+                                  f"Successfully assigned {sequences_assigned} sequence numbers from master to remote fixtures.")
+                                  
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error assigning sequences:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def _populate_alignment_tables(self, preserve_order=True):
+        """Populate the master and remote attribute tables."""
+        try:
+            # Prevent recursive calls during table population
+            if self.table_population_in_progress:
+                return
+            self.table_population_in_progress = True
+            
+            # Save current table ordering if preserving order
+            if preserve_order:
+                self._save_current_table_order()
+            
             # Clear existing data
             self.master_fixtures_table.setRowCount(0)
             self.remote_fixtures_table.setRowCount(0)
@@ -2265,70 +2560,343 @@ class MVRApp(QMainWindow):
             # Get manual alignments
             manual_alignments = self.controller.get_manual_alignments()
             
-            # Populate master fixtures table
+            # Populate master attributes table
             master_fixtures = self.controller.master_matched_fixtures
             if master_fixtures:
-                self.master_fixtures_table.setRowCount(len(master_fixtures))
-                for row, fixture in enumerate(master_fixtures):
-                    # Create editable items
-                    id_item = QTableWidgetItem(str(fixture.fixture_id))
-                    name_item = QTableWidgetItem(fixture.name)
-                    type_item = QTableWidgetItem(fixture.gdtf_spec or "Unknown")
-                    mode_item = QTableWidgetItem(fixture.gdtf_mode or "")
-                    address_item = QTableWidgetItem(str(fixture.base_address))
+                master_attribute_rows = []
+                
+                # Build list of all attribute rows for master fixtures
+                for fixture in master_fixtures:
+                    if not fixture.is_matched():
+                        continue
+                        
+                    # Get fixture type to determine which attributes to show
+                    fixture_type = fixture.gdtf_spec or "Unknown"
+                    fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+                    fixture_attributes = self.master_fixture_type_attributes.get(fixture_type_clean, [])
                     
-                    # Show routing status (read-only for now)
-                    routing_status = ""
-                    if fixture.fixture_id in manual_alignments:
-                        remote_id = manual_alignments[fixture.fixture_id]
-                        routing_status = f"→ {remote_id}"
-                    routing_item = QTableWidgetItem(routing_status)
-                    routing_item.setFlags(routing_item.flags() & ~Qt.ItemFlag.ItemIsEditable)  # Make read-only
+                    # Add each attribute as a separate row
+                    for attr_name in fixture_attributes:
+                        if attr_name in fixture.attribute_offsets:
+                            # Get attribute details
+                            sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                            activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                            
+                            # Get address info
+                            addr_info = fixture.absolute_addresses.get(attr_name, {})
+                            universe = addr_info.get("universe", "?")
+                            channel = addr_info.get("channel", "?")
+                            absolute_address = addr_info.get("absolute_address", "?")
+                            
+                            # Show routing status
+                            routing_status = ""
+                            if fixture.fixture_id in manual_alignments:
+                                remote_id = manual_alignments[fixture.fixture_id]
+                                routing_status = f"→ Fixture {remote_id}"
+                            
+                            master_attribute_rows.append({
+                                'fixture_id': fixture.fixture_id,
+                                'fixture_name': fixture.name,
+                                'attribute': attr_name,
+                                'sequence': sequence_num or "—",
+                                'activation_group': activation_group or "—",
+                                'universe': universe,
+                                'channel': channel,
+                                'absolute': absolute_address,
+                                'routing': routing_status
+                            })
+                
+                # Set table size and populate rows
+                self.master_fixtures_table.setRowCount(len(master_attribute_rows))
+                for row, attr_row in enumerate(master_attribute_rows):
+                    # Create table items
+                    id_item = QTableWidgetItem(str(attr_row['fixture_id']))
+                    name_item = QTableWidgetItem(attr_row['fixture_name'])
+                    attr_item = QTableWidgetItem(attr_row['attribute'])
+                    seq_item = QTableWidgetItem(str(attr_row['sequence']))
+                    group_item = QTableWidgetItem(attr_row['activation_group'])
+                    universe_item = QTableWidgetItem(str(attr_row['universe']))
+                    channel_item = QTableWidgetItem(str(attr_row['channel']))
+                    absolute_item = QTableWidgetItem(str(attr_row['absolute']))
+                    routing_item = QTableWidgetItem(attr_row['routing'])
+                    
+                    # Make routing column read-only
+                    routing_item.setFlags(routing_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     
                     # Set items in table
                     self.master_fixtures_table.setItem(row, 0, id_item)
                     self.master_fixtures_table.setItem(row, 1, name_item)
-                    self.master_fixtures_table.setItem(row, 2, type_item)
-                    self.master_fixtures_table.setItem(row, 3, mode_item)
-                    self.master_fixtures_table.setItem(row, 4, address_item)
-                    self.master_fixtures_table.setItem(row, 5, routing_item)
+                    self.master_fixtures_table.setItem(row, 2, attr_item)
+                    self.master_fixtures_table.setItem(row, 3, seq_item)
+                    self.master_fixtures_table.setItem(row, 4, group_item)
+                    self.master_fixtures_table.setItem(row, 5, universe_item)
+                    self.master_fixtures_table.setItem(row, 6, channel_item)
+                    self.master_fixtures_table.setItem(row, 7, absolute_item)
+                    self.master_fixtures_table.setItem(row, 8, routing_item)
             
-            # Populate remote fixtures table
+            # Populate remote attributes table
             remote_fixtures = self.controller.remote_matched_fixtures
             if remote_fixtures:
-                self.remote_fixtures_table.setRowCount(len(remote_fixtures))
-                for row, fixture in enumerate(remote_fixtures):
-                    # Create editable items
-                    id_item = QTableWidgetItem(str(fixture.fixture_id))
-                    name_item = QTableWidgetItem(fixture.name)
-                    type_item = QTableWidgetItem(fixture.gdtf_spec or "Unknown")
-                    mode_item = QTableWidgetItem(fixture.gdtf_mode or "")
-                    address_item = QTableWidgetItem(str(fixture.base_address))
+                remote_attribute_rows = []
+                
+                # Build list of all attribute rows for remote fixtures
+                for fixture in remote_fixtures:
+                    if not fixture.is_matched():
+                        continue
+                        
+                    # Get fixture type to determine which attributes to show
+                    fixture_type = fixture.gdtf_spec or "Unknown"
+                    fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+                    fixture_attributes = self.remote_fixture_type_attributes.get(fixture_type_clean, [])
                     
-                    # Show routing status (read-only for now)
-                    routing_status = ""
-                    # Check if this remote fixture is linked with any master
-                    for master_id, remote_id in manual_alignments.items():
-                        if remote_id == fixture.fixture_id:
-                            routing_status = f"← {master_id}"
-                            break
-                    routing_item = QTableWidgetItem(routing_status)
-                    routing_item.setFlags(routing_item.flags() & ~Qt.ItemFlag.ItemIsEditable)  # Make read-only
+                    # Add each attribute as a separate row
+                    for attr_name in fixture_attributes:
+                        if attr_name in fixture.attribute_offsets:
+                            # Get attribute details
+                            sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                            activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                            
+                            # Get address info
+                            addr_info = fixture.absolute_addresses.get(attr_name, {})
+                            universe = addr_info.get("universe", "?")
+                            channel = addr_info.get("channel", "?")
+                            absolute_address = addr_info.get("absolute_address", "?")
+                            
+                            # Show routing status
+                            routing_status = ""
+                            # Check if this remote fixture is linked with any master
+                            for master_id, remote_id in manual_alignments.items():
+                                if remote_id == fixture.fixture_id:
+                                    routing_status = f"← Fixture {master_id}"
+                                    break
+                            
+                            remote_attribute_rows.append({
+                                'fixture_id': fixture.fixture_id,
+                                'fixture_name': fixture.name,
+                                'attribute': attr_name,
+                                'sequence': sequence_num or "",  # Show blank sequence for remote fixtures initially
+                                'activation_group': activation_group or "—",
+                                'universe': universe,
+                                'channel': channel,
+                                'absolute': absolute_address,
+                                'routing': routing_status
+                            })
+                
+                # Set table size and populate rows
+                self.remote_fixtures_table.setRowCount(len(remote_attribute_rows))
+                for row, attr_row in enumerate(remote_attribute_rows):
+                    # Create table items
+                    id_item = QTableWidgetItem(str(attr_row['fixture_id']))
+                    name_item = QTableWidgetItem(attr_row['fixture_name'])
+                    attr_item = QTableWidgetItem(attr_row['attribute'])
+                    seq_item = QTableWidgetItem(str(attr_row['sequence']))
+                    group_item = QTableWidgetItem(attr_row['activation_group'])
+                    universe_item = QTableWidgetItem(str(attr_row['universe']))
+                    channel_item = QTableWidgetItem(str(attr_row['channel']))
+                    absolute_item = QTableWidgetItem(str(attr_row['absolute']))
+                    routing_item = QTableWidgetItem(attr_row['routing'])
+                    
+                    # Make routing column read-only
+                    routing_item.setFlags(routing_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     
                     # Set items in table
                     self.remote_fixtures_table.setItem(row, 0, id_item)
                     self.remote_fixtures_table.setItem(row, 1, name_item)
-                    self.remote_fixtures_table.setItem(row, 2, type_item)
-                    self.remote_fixtures_table.setItem(row, 3, mode_item)
-                    self.remote_fixtures_table.setItem(row, 4, address_item)
-                    self.remote_fixtures_table.setItem(row, 5, routing_item)
+                    self.remote_fixtures_table.setItem(row, 2, attr_item)
+                    self.remote_fixtures_table.setItem(row, 3, seq_item)
+                    self.remote_fixtures_table.setItem(row, 4, group_item)
+                    self.remote_fixtures_table.setItem(row, 5, universe_item)
+                    self.remote_fixtures_table.setItem(row, 6, channel_item)
+                    self.remote_fixtures_table.setItem(row, 7, absolute_item)
+                    self.remote_fixtures_table.setItem(row, 8, routing_item)
             
             # Resize columns to fit content
             self.master_fixtures_table.resizeColumnsToContents()
             self.remote_fixtures_table.resizeColumnsToContents()
             
+            # Restore table ordering if preserving order
+            if preserve_order:
+                self._restore_table_order()
+            
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error populating alignment tables:\n{str(e)}")
+        finally:
+            self.table_population_in_progress = False
+    
+    def _save_current_table_order(self):
+        """Save the current table order to preserve user's custom ordering."""
+        try:
+            # Save master table order
+            if hasattr(self, 'master_fixtures_table'):
+                self.master_table_order = self._extract_fixture_order_from_table(self.master_fixtures_table)
+            
+            # Save remote table order
+            if hasattr(self, 'remote_fixtures_table'):
+                self.remote_table_order = self._extract_fixture_order_from_table(self.remote_fixtures_table)
+                
+        except Exception as e:
+            print(f"Error saving table order: {e}")
+    
+    def _restore_table_order(self):
+        """Restore the saved table order after table repopulation."""
+        try:
+            # Restore master table order
+            if self.master_table_order and hasattr(self, 'master_fixtures_table'):
+                self._reorder_table_by_saved_order(self.master_fixtures_table, self.master_table_order)
+            
+            # Restore remote table order  
+            if self.remote_table_order and hasattr(self, 'remote_fixtures_table'):
+                self._reorder_table_by_saved_order(self.remote_fixtures_table, self.remote_table_order)
+                
+        except Exception as e:
+            print(f"Error restoring table order: {e}")
+    
+    def _reorder_table_by_saved_order(self, table, saved_order):
+        """Reorder a table to match a saved order of (fixture_id, attribute_name) tuples."""
+        if not saved_order:
+            return
+            
+        # Create a mapping of current rows by (fixture_id, attribute)
+        current_rows = {}
+        for row in range(table.rowCount()):
+            fixture_id_item = table.item(row, 0)  # Fixture ID column
+            attr_item = table.item(row, 2)        # Attribute column
+            
+            if fixture_id_item and attr_item:
+                try:
+                    fixture_id = int(fixture_id_item.text())
+                    attr_name = attr_item.text()
+                    
+                    # Store all items for this row
+                    row_items = []
+                    for col in range(table.columnCount()):
+                        item = table.item(row, col)
+                        row_items.append(item.text() if item else "")
+                    
+                    current_rows[(fixture_id, attr_name)] = row_items
+                except (ValueError, AttributeError):
+                    continue
+        
+        # Rebuild table in the saved order
+        table.setRowCount(0)
+        ordered_rows = []
+        
+        # Add rows in saved order
+        for fixture_id, attr_name in saved_order:
+            if (fixture_id, attr_name) in current_rows:
+                ordered_rows.append(current_rows[(fixture_id, attr_name)])
+        
+        # Add any remaining rows that weren't in saved order
+        for key, row_data in current_rows.items():
+            if key not in saved_order:
+                ordered_rows.append(row_data)
+        
+        # Populate the table with ordered rows
+        table.setRowCount(len(ordered_rows))
+        for row, row_data in enumerate(ordered_rows):
+            for col, cell_text in enumerate(row_data):
+                item = QTableWidgetItem(cell_text)
+                if col == 8:  # Routing column should be read-only
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, col, item)
+    
+    def _should_repopulate_tables(self):
+        """Determine if tables need to be rebuilt or just updated."""
+        try:
+            # If tables are empty, we need to populate them
+            if (not hasattr(self, 'master_fixtures_table') or 
+                not hasattr(self, 'remote_fixtures_table') or
+                self.master_fixtures_table.rowCount() == 0 or 
+                self.remote_fixtures_table.rowCount() == 0):
+                return True
+            
+            # Check if the number of rows matches expected data
+            master_fixtures = self.controller.master_matched_fixtures
+            remote_fixtures = self.controller.remote_matched_fixtures
+            
+            if master_fixtures:
+                expected_master_rows = 0
+                for fixture in master_fixtures:
+                    if fixture.is_matched():
+                        fixture_type = fixture.gdtf_spec or "Unknown"
+                        fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+                        fixture_attributes = self.master_fixture_type_attributes.get(fixture_type_clean, [])
+                        expected_master_rows += len([attr for attr in fixture_attributes if attr in fixture.attribute_offsets])
+                
+                if self.master_fixtures_table.rowCount() != expected_master_rows:
+                    return True
+            
+            if remote_fixtures:
+                expected_remote_rows = 0
+                for fixture in remote_fixtures:
+                    if fixture.is_matched():
+                        fixture_type = fixture.gdtf_spec or "Unknown"
+                        fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+                        fixture_attributes = self.remote_fixture_type_attributes.get(fixture_type_clean, [])
+                        expected_remote_rows += len([attr for attr in fixture_attributes if attr in fixture.attribute_offsets])
+                
+                if self.remote_fixtures_table.rowCount() != expected_remote_rows:
+                    return True
+                
+                # Additional check: Ensure remote fixtures have address data populated
+                # If any remote fixture has attributes but no address data, repopulate
+                for fixture in remote_fixtures:
+                    if fixture.is_matched():
+                        fixture_type_clean = (fixture.gdtf_spec or "Unknown").replace('.gdtf', '')
+                        fixture_attributes = self.remote_fixture_type_attributes.get(fixture_type_clean, [])
+                        for attr_name in fixture_attributes:
+                            if attr_name in fixture.attribute_offsets:
+                                # Check if this attribute has address data
+                                if not fixture.absolute_addresses or attr_name not in fixture.absolute_addresses:
+                                    return True
+            
+            # Tables seem to be in sync, no repopulation needed
+            return False
+            
+        except Exception as e:
+            print(f"Error checking if repopulation needed: {e}")
+            # When in doubt, repopulate to be safe
+            return True
+    
+    def _update_sequences_in_place(self):
+        """Update sequence numbers in tables without rebuilding them."""
+        try:
+            # Update master table sequences
+            for row in range(self.master_fixtures_table.rowCount()):
+                fixture_id_item = self.master_fixtures_table.item(row, 0)
+                attr_item = self.master_fixtures_table.item(row, 2)
+                seq_item = self.master_fixtures_table.item(row, 3)
+                
+                if fixture_id_item and attr_item and seq_item:
+                    fixture_id = int(fixture_id_item.text())
+                    attr_name = attr_item.text()
+                    
+                    # Find the fixture and get current sequence
+                    for fixture in self.controller.master_matched_fixtures:
+                        if fixture.fixture_id == fixture_id:
+                            current_seq = fixture.get_sequence_for_attribute(attr_name)
+                            seq_item.setText(str(current_seq) if current_seq else "—")
+                            break
+            
+            # Update remote table sequences
+            for row in range(self.remote_fixtures_table.rowCount()):
+                fixture_id_item = self.remote_fixtures_table.item(row, 0)
+                attr_item = self.remote_fixtures_table.item(row, 2)
+                seq_item = self.remote_fixtures_table.item(row, 3)
+                
+                if fixture_id_item and attr_item and seq_item:
+                    fixture_id = int(fixture_id_item.text())
+                    attr_name = attr_item.text()
+                    
+                    # Find the fixture and get current sequence
+                    for fixture in self.controller.remote_matched_fixtures:
+                        if fixture.fixture_id == fixture_id:
+                            current_seq = fixture.get_sequence_for_attribute(attr_name)
+                            seq_item.setText(str(current_seq) if current_seq else "")
+                            break
+                            
+        except Exception as e:
+            print(f"Error updating sequences in place: {e}")
     
     def _update_alignment_status(self):
         """Update the alignment status label."""
@@ -2337,11 +2905,11 @@ class MVRApp(QMainWindow):
             alignment_count = len(manual_alignments)
             
             if alignment_count > 0:
-                self.alignment_status.setText(f"✓ {alignment_count} manual routing(s) set")
+                self.alignment_status.setText(f"✓ {alignment_count} manual attribute routing(s) set")
                 self.alignment_status.setStyleSheet("color: green; font-weight: bold; padding: 10px;")
                 self.clear_alignment_btn.setEnabled(True)
             else:
-                self.alignment_status.setText("Load Master and Remote fixtures to begin routing")
+                self.alignment_status.setText("Load Master and Remote fixtures to begin attribute routing")
                 self.alignment_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
                 self.clear_alignment_btn.setEnabled(False)
                 
@@ -2351,18 +2919,117 @@ class MVRApp(QMainWindow):
     
     def on_row_moved(self, from_index, to_index):
         """Handle when a row is moved via drag and drop."""
+        # Save the new table order immediately
+        self._save_current_table_order()
+        
+        # Update backend fixture data to match new table order
+        self._update_fixture_order_from_tables()
+        
         # Mark that the routing has been modified
         self.mark_project_dirty()
         self.status_bar.showMessage(f"Row moved from {from_index} to {to_index}")
     
+    def on_rows_moved(self, selected_rows, target_row):
+        """Handle when multiple rows are moved via drag and drop."""
+        # Save the new table order immediately
+        self._save_current_table_order()
+        
+        # Update backend fixture data to match new table order
+        self._update_fixture_order_from_tables()
+        
+        # Mark that the routing has been modified
+        self.mark_project_dirty()
+        
+        # Create informative status message
+        if len(selected_rows) == 1:
+            self.status_bar.showMessage(f"Row moved from {selected_rows[0]} to {target_row}")
+        else:
+            self.status_bar.showMessage(f"{len(selected_rows)} rows moved to position {target_row}")
+    
+    def _update_fixture_order_from_tables(self):
+        """Update backend fixture data to match the current table order."""
+        try:
+            # Update master fixtures order
+            if hasattr(self, 'master_fixtures_table') and self.controller.master_matched_fixtures:
+                master_order = self._extract_fixture_order_from_table(self.master_fixtures_table)
+                if master_order:
+                    self.controller.master_matched_fixtures = self._reorder_fixtures_by_attributes(
+                        self.controller.master_matched_fixtures, master_order
+                    )
+            
+            # Update remote fixtures order  
+            if hasattr(self, 'remote_fixtures_table') and self.controller.remote_matched_fixtures:
+                remote_order = self._extract_fixture_order_from_table(self.remote_fixtures_table)
+                if remote_order:
+                    self.controller.remote_matched_fixtures = self._reorder_fixtures_by_attributes(
+                        self.controller.remote_matched_fixtures, remote_order
+                    )
+                    
+        except Exception as e:
+            print(f"Error updating fixture order: {e}")
+    
+    def _extract_fixture_order_from_table(self, table):
+        """Extract the current order of (fixture_id, attribute_name) from a table."""
+        order = []
+        for row in range(table.rowCount()):
+            fixture_id_item = table.item(row, 0)  # Fixture ID column
+            attr_item = table.item(row, 2)        # Attribute column
+            
+            if fixture_id_item and attr_item:
+                try:
+                    fixture_id = int(fixture_id_item.text())
+                    attr_name = attr_item.text()
+                    order.append((fixture_id, attr_name))
+                except (ValueError, AttributeError):
+                    continue
+        
+        return order
+    
+    def _reorder_fixtures_by_attributes(self, fixtures, attribute_order):
+        """Reorder fixtures based on the order of their attributes in the table."""
+        if not attribute_order:
+            return fixtures
+        
+        # Create a map of fixtures by ID for quick lookup
+        fixture_map = {fixture.fixture_id: fixture for fixture in fixtures}
+        
+        # Track which fixtures we've processed and in what order
+        processed_fixtures = []
+        processed_fixture_ids = set()
+        
+        # Go through the attribute order and add fixtures in the order they first appear
+        for fixture_id, attr_name in attribute_order:
+            if fixture_id in fixture_map and fixture_id not in processed_fixture_ids:
+                processed_fixtures.append(fixture_map[fixture_id])
+                processed_fixture_ids.add(fixture_id)
+        
+        # Add any remaining fixtures that weren't in the table (shouldn't happen, but just in case)
+        for fixture in fixtures:
+            if fixture.fixture_id not in processed_fixture_ids:
+                processed_fixtures.append(fixture)
+        
+        return processed_fixtures
+    
     def on_row_inserted(self, row_index):
         """Handle when an empty row is inserted."""
+        # Save the new table order immediately
+        self._save_current_table_order()
+        
+        # Update backend fixture data to match new table order
+        self._update_fixture_order_from_tables()
+        
         self.status_bar.showMessage(f"Empty row inserted at position {row_index}")
         # Mark that the routing has been modified
         self.mark_project_dirty()
     
     def on_row_deleted(self, row_index):
         """Handle when a row is deleted."""
+        # Save the new table order immediately
+        self._save_current_table_order()
+        
+        # Update backend fixture data to match new table order
+        self._update_fixture_order_from_tables()
+        
         self.status_bar.showMessage(f"Row deleted at position {row_index}")
         # Mark that the routing has been modified
         self.mark_project_dirty()
@@ -2540,6 +3207,7 @@ class MVRApp(QMainWindow):
             fixture_item.setText(2, fixture_type)
             fixture_item.setText(3, str(fixture.base_address))
             fixture_item.setText(4, fixture.gdtf_mode or "")
+            fixture_item.setText(5, "—")  # No fixture-level ActivationGroup anymore
             
             # Set fixture item styling
             font = QFont()
@@ -2562,9 +3230,15 @@ class MVRApp(QMainWindow):
                         attr_item.setText(2, "—")
                         attr_item.setText(3, "—")
                         attr_item.setText(4, "—")
-                        attr_item.setText(5, str(universe))
-                        attr_item.setText(6, str(channel))
-                        attr_item.setText(7, str(absolute_address))
+                        # Get ActivationGroup for this attribute
+                        activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                        attr_item.setText(5, activation_group if activation_group else "—")
+                        # Get sequence number for this attribute
+                        sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                        attr_item.setText(6, str(sequence_num) if sequence_num else "—")
+                        attr_item.setText(7, str(universe))
+                        attr_item.setText(8, str(channel))
+                        attr_item.setText(9, str(absolute_address))
                         
                         fixture_item.addChild(attr_item)
             
@@ -2629,6 +3303,7 @@ class MVRApp(QMainWindow):
             fixture_item.setText(2, fixture_type)
             fixture_item.setText(3, str(fixture.base_address))
             fixture_item.setText(4, fixture.gdtf_mode or "")
+            fixture_item.setText(5, "—")  # No fixture-level ActivationGroup anymore
             
             # Set fixture item styling
             font = QFont()
@@ -2651,9 +3326,15 @@ class MVRApp(QMainWindow):
                         attr_item.setText(2, "—")
                         attr_item.setText(3, "—")
                         attr_item.setText(4, "—")
-                        attr_item.setText(5, str(universe))
-                        attr_item.setText(6, str(channel))
-                        attr_item.setText(7, str(absolute_address))
+                        # Get ActivationGroup for this attribute
+                        activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                        attr_item.setText(5, activation_group if activation_group else "—")
+                        # Get sequence number for this attribute
+                        sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                        attr_item.setText(6, str(sequence_num) if sequence_num else "—")
+                        attr_item.setText(7, str(universe))
+                        attr_item.setText(8, str(channel))
+                        attr_item.setText(9, str(absolute_address))
                         
                         fixture_item.addChild(attr_item)
             
@@ -2749,6 +3430,11 @@ class MVRApp(QMainWindow):
         
         self.status_bar.showMessage(status_msg)
         
+        # Force update of routing tables to reflect new address data
+        if hasattr(self, 'remote_results') and self.remote_results is not None:
+            # Force repopulation of alignment tables to ensure address data is current
+            self._populate_alignment_tables(preserve_order=True)
+        
         # Update UI state
         self.update_ui_state()
     
@@ -2792,6 +3478,11 @@ class MVRApp(QMainWindow):
             status_msg += f", {conflicts} conflicts"
         
         self.status_bar.showMessage(status_msg)
+        
+        # Force update of routing tables to reflect new address data
+        if hasattr(self, 'master_results') and self.master_results is not None:
+            # Force repopulation of alignment tables to ensure address data is current
+            self._populate_alignment_tables(preserve_order=True)
         
         # Update UI state
         self.update_ui_state()
@@ -2884,9 +3575,18 @@ class MVRApp(QMainWindow):
             "• GDTF profile matching\n"
             "• DMX address calculation\n"
             "• Multiple export formats\n"
-            "• MA3 XML remote generation\n\n"
+            "• MA3 XML remote generation\n"
+            "• Global sequence numbering\n\n"
             "© 2025 AttributeAddresser"
         )
+    
+    def show_settings(self):
+        """Show settings dialog."""
+        try:
+            dialog = SettingsDialog(self, self.config)
+            dialog.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error opening settings dialog:\n{str(e)}")
     
     def new_project(self):
         """Create a new project."""
@@ -3081,6 +3781,10 @@ class MVRApp(QMainWindow):
                 self.controller.alignment_results = project_data.get('alignment_results')
                 self.controller.manual_alignments = project_data.get('manual_alignments', {})
                 self.controller.alignment_mode = project_data.get('alignment_mode', 'automatic')
+                
+                # Restore table ordering
+                self.master_table_order = project_data.get('master_table_order', [])
+                self.remote_table_order = project_data.get('remote_table_order', [])
                 
                 # Restore UI state
                 if 'current_tab_index' in project_data:
@@ -3288,6 +3992,10 @@ class MVRApp(QMainWindow):
                 'alignment_results': self.controller.alignment_results,
                 'manual_alignments': self.controller.manual_alignments,
                 'alignment_mode': self.controller.alignment_mode,
+                
+                # Table ordering preservation
+                'master_table_order': getattr(self, 'master_table_order', []),
+                'remote_table_order': getattr(self, 'remote_table_order', []),
                 
                 # Configuration and settings
                 'external_gdtf_folder': self._make_path_relative(self.config.get_external_gdtf_folder(), file_path),
@@ -3898,19 +4606,25 @@ class MVRApp(QMainWindow):
         if hasattr(self, 'align_btn'):
             self.align_btn.setEnabled(bool(can_align))
         
+        # Enable assign sequences button when both datasets are available
+        if hasattr(self, 'assign_sequences_btn'):
+            self.assign_sequences_btn.setEnabled(bool(can_align))
+        
         # Populate alignment tables when both datasets are available
         if can_align:
-            self._populate_alignment_tables()
+            # Only repopulate if data structure has changed, not just sequence values
+            if self._should_repopulate_tables():
+                self._populate_alignment_tables(preserve_order=True)
             self._update_alignment_status()
         elif hasattr(self, 'alignment_status'):
             if has_master and not has_remote:
-                self.alignment_status.setText("Load remote fixtures to begin routing")
+                self.alignment_status.setText("Load remote fixtures to begin attribute routing")
                 self.alignment_status.setStyleSheet("color: orange; font-style: italic; padding: 10px;")
             elif has_remote and not has_master:
-                self.alignment_status.setText("Load master fixtures to begin routing")
+                self.alignment_status.setText("Load master fixtures to begin attribute routing")
                 self.alignment_status.setStyleSheet("color: orange; font-style: italic; padding: 10px;")
             else:
-                self.alignment_status.setText("Load Master and Remote fixtures to begin routing")
+                self.alignment_status.setText("Load Master and Remote fixtures to begin attribute routing")
                 self.alignment_status.setStyleSheet("color: gray; font-style: italic; padding: 10px;")
 
 def main():

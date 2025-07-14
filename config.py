@@ -45,7 +45,13 @@ class Config:
                 "out_from": 0.0,
                 "out_to": 100.0,
                 "resolution": "16bit"
-            }
+            },
+            "available_attributes": [
+                "Dim", "R", "G", "B", "W", "WW", "CW", "A", "UV", "Lime", "Cyan", "Magenta", "Yellow",
+                "Pan", "Tilt", "Zoom", "Focus", "Iris", "Gobo1", "Gobo2", "Color1", "Color2", 
+                "Prism", "Frost", "Shutter", "Strobe"
+            ],
+            "sequence_start_number": 1001
         }
     
     def save_config(self):
@@ -165,14 +171,18 @@ class Config:
         self.save_config()
     
     def get_available_attributes(self) -> List[str]:
-        """Get list of commonly found MVR attributes (legacy method for backward compatibility)."""
-        return [
-            "Position X", "Position Y", "Position Z",
-            "Rotation X", "Rotation Y", "Rotation Z",
-            "Scale X", "Scale Y", "Scale Z",
-            "Color", "Intensity", "Dimmer",
-            "Pan", "Tilt", "Focus",
-            "Gobo", "Prism", "Iris",
-            "Shutter", "Speed", "Mode",
-            "Address", "Universe", "Channel"
-        ] 
+        """Get list of available attributes for quick selection."""
+        return self.config.get("available_attributes", [
+            "Dim", "R", "G", "B", "W", "WW", "CW", "A", "UV", "Lime", "Cyan", "Magenta", "Yellow",
+            "Pan", "Tilt", "Zoom", "Focus", "Iris", "Gobo1", "Gobo2", "Color1", "Color2", 
+            "Prism", "Frost", "Shutter", "Strobe"
+        ])
+
+    def get_sequence_start_number(self) -> int:
+        """Get the starting number for sequence numbering."""
+        return self.config.get("sequence_start_number", 1)
+    
+    def set_sequence_start_number(self, start_number: int):
+        """Set the starting number for sequence numbering and save config."""
+        self.config["sequence_start_number"] = start_number
+        self.save_config() 

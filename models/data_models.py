@@ -12,7 +12,14 @@ class GDTFMode:
     """Represents a GDTF mode with its channel mappings."""
     name: str
     channels: Dict[str, int]  # attribute_name -> channel_offset
-    total_channels: int
+    activation_groups: Dict[str, Optional[str]] = None  # attribute_name -> activation_group_name
+    total_channels: int = 0
+    
+    def __post_init__(self):
+        if self.activation_groups is None:
+            self.activation_groups = {}
+        if self.total_channels == 0:
+            self.total_channels = len(self.channels)
 
 
 @dataclass
@@ -43,13 +50,19 @@ class FixtureMatch:
     matched_mode: Optional[GDTFMode] = None
     attribute_offsets: Dict[str, int] = None
     match_status: str = "pending"  # "matched", "gdtf_missing", "mode_missing", "error"
-    absolute_addresses: Dict[str, tuple] = None  # attribute_name -> (universe, channel)
+    absolute_addresses: Dict[str, Dict[str, int]] = None  # attribute_name -> {"universe": X, "channel": Y, "absolute_address": Z}
+    attribute_sequences: Dict[str, int] = None  # attribute_name -> sequence_number
+    attribute_activation_groups: Dict[str, Optional[str]] = None  # attribute_name -> activation_group_name
     
     def __post_init__(self):
         if self.attribute_offsets is None:
             self.attribute_offsets = {}
         if self.absolute_addresses is None:
             self.absolute_addresses = {}
+        if self.attribute_sequences is None:
+            self.attribute_sequences = {}
+        if self.attribute_activation_groups is None:
+            self.attribute_activation_groups = {}
     
     def is_matched(self) -> bool:
         """Check if fixture is successfully matched."""
@@ -57,7 +70,18 @@ class FixtureMatch:
     
     def get_address_for_attribute(self, attribute_name: str) -> Optional[tuple]:
         """Get (universe, channel) for a specific attribute."""
-        return self.absolute_addresses.get(attribute_name)
+        addr_info = self.absolute_addresses.get(attribute_name)
+        if addr_info and isinstance(addr_info, dict):
+            return (addr_info.get("universe"), addr_info.get("channel"))
+        return None
+    
+    def get_sequence_for_attribute(self, attribute_name: str) -> Optional[int]:
+        """Get sequence number for a specific attribute."""
+        return self.attribute_sequences.get(attribute_name)
+    
+    def get_activation_group_for_attribute(self, attribute_name: str) -> Optional[str]:
+        """Get activation group for a specific attribute."""
+        return self.attribute_activation_groups.get(attribute_name)
 
 
 @dataclass

@@ -174,7 +174,7 @@ class MVRService:
         return None
     
     def analyze_fixtures(self, fixtures: List[FixtureMatch], selected_attributes: List[str], 
-                        output_format: str = "text", ma3_config: dict = None) -> AnalysisResults:
+                        output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1) -> AnalysisResults:
         """
         Analyze fixtures and calculate addresses for selected attributes.
         
@@ -182,6 +182,7 @@ class MVRService:
             fixtures: List of FixtureMatch objects
             selected_attributes: List of attribute names to analyze
             output_format: Output format for results
+            sequence_start: Starting number for global sequence numbering
             
         Returns:
             AnalysisResults object with complete analysis
@@ -193,7 +194,7 @@ class MVRService:
             raise ValueError("No attributes selected for analysis")
         
         # Calculate addresses for all fixtures
-        fixtures_with_addresses = self._calculate_addresses(fixtures, selected_attributes)
+        fixtures_with_addresses = self._calculate_addresses(fixtures, selected_attributes, sequence_start)
         
         # Generate summary
         summary = self._generate_summary(fixtures_with_addresses, selected_attributes)
@@ -214,7 +215,7 @@ class MVRService:
         )
     
     def analyze_fixtures_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], 
-                                output_format: str = "text", ma3_config: dict = None) -> AnalysisResults:
+                                output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1) -> AnalysisResults:
         """
         Analyze fixtures with per-fixture-type attributes.
         
@@ -222,6 +223,7 @@ class MVRService:
             fixtures: List of FixtureMatch objects
             fixture_type_attributes: Dict mapping fixture_type -> list of attribute names
             output_format: Output format for results
+            sequence_start: Starting number for global sequence numbering
             
         Returns:
             AnalysisResults object with complete analysis
@@ -233,7 +235,7 @@ class MVRService:
             raise ValueError("No fixture type attributes provided for analysis")
         
         # Calculate addresses for all fixtures based on their fixture type
-        fixtures_with_addresses = self._calculate_addresses_by_type(fixtures, fixture_type_attributes)
+        fixtures_with_addresses = self._calculate_addresses_by_type(fixtures, fixture_type_attributes, sequence_start)
         
         # Collect all selected attributes across all fixture types
         all_selected_attributes = []
@@ -259,22 +261,58 @@ class MVRService:
             validation_info=validation_info
         )
     
-    def _calculate_addresses(self, fixtures: List[FixtureMatch], selected_attributes: List[str]) -> List[FixtureMatch]:
+    def _calculate_addresses(self, fixtures: List[FixtureMatch], selected_attributes: List[str], sequence_start: int = 1) -> List[FixtureMatch]:
         """Calculate absolute addresses for all fixtures."""
         updated_fixtures = []
+        global_sequence_counter = sequence_start  # Start global sequence from specified number
         
         for fixture in fixtures:
             if fixture.is_matched():
                 # Calculate addresses for this fixture
                 addresses = self._calculate_fixture_addresses(fixture, selected_attributes)
                 fixture.absolute_addresses = addresses
+                
+                # Assign global sequence numbers for each attribute
+                fixture.attribute_sequences = {}
+                for attr_name in selected_attributes:
+                    if attr_name in fixture.attribute_offsets:
+                        fixture.attribute_sequences[attr_name] = global_sequence_counter
+                        global_sequence_counter += 1  # Increment global counter
             
             updated_fixtures.append(fixture)
         
         return updated_fixtures
     
-    def _calculate_addresses_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]]) -> List[FixtureMatch]:
+    def _calculate_addresses_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], sequence_start: int = 1) -> List[FixtureMatch]:
         """Calculate absolute addresses for fixtures based on their fixture type."""
+        updated_fixtures = []
+        global_sequence_counter = sequence_start  # Start global sequence from specified number
+        
+        for fixture in fixtures:
+            if fixture.is_matched():
+                # Get attributes for this fixture type
+                fixture_type = fixture.gdtf_spec or "Unknown"
+                # Remove .gdtf extension for consistent naming
+                fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+                selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
+                
+                # Calculate addresses and assign global sequence numbers for this fixture
+                addresses = self._calculate_fixture_addresses(fixture, selected_attributes)
+                fixture.absolute_addresses = addresses
+                
+                # Assign global sequence numbers for each attribute
+                fixture.attribute_sequences = {}
+                for attr_name in selected_attributes:
+                    if attr_name in fixture.attribute_offsets:
+                        fixture.attribute_sequences[attr_name] = global_sequence_counter
+                        global_sequence_counter += 1  # Increment global counter
+            
+            updated_fixtures.append(fixture)
+        
+        return updated_fixtures
+    
+    def _calculate_addresses_by_type_without_sequences(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]]) -> List[FixtureMatch]:
+        """Calculate absolute addresses for fixtures based on their fixture type, but don't assign sequence numbers."""
         updated_fixtures = []
         
         for fixture in fixtures:
@@ -285,13 +323,64 @@ class MVRService:
                 fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
                 selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
                 
-                # Calculate addresses for this fixture
+                # Calculate addresses only (no sequence assignment)
                 addresses = self._calculate_fixture_addresses(fixture, selected_attributes)
                 fixture.absolute_addresses = addresses
+                
+                # Initialize empty sequence dictionary (sequences will be blank)
+                fixture.attribute_sequences = {}
             
             updated_fixtures.append(fixture)
         
         return updated_fixtures
+    
+    def analyze_fixtures_by_type_without_sequences(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], 
+                                output_format: str = "text", ma3_config: dict = None) -> AnalysisResults:
+        """
+        Analyze fixtures with per-fixture-type attributes, but don't assign sequence numbers.
+        This is intended for remote fixtures that will get sequences assigned later.
+        
+        Args:
+            fixtures: List of FixtureMatch objects
+            fixture_type_attributes: Dict mapping fixture_type -> list of attribute names
+            output_format: Output format for results
+            ma3_config: Configuration for MA3 XML export
+            
+        Returns:
+            AnalysisResults object with complete analysis but no sequence numbers
+        """
+        if not fixtures:
+            raise ValueError("No fixtures provided for analysis")
+        
+        if not fixture_type_attributes:
+            raise ValueError("No fixture type attributes provided for analysis")
+        
+        # Calculate addresses for all fixtures based on their fixture type (no sequences)
+        fixtures_with_addresses = self._calculate_addresses_by_type_without_sequences(fixtures, fixture_type_attributes)
+        
+        # Collect all selected attributes across all fixture types
+        all_selected_attributes = []
+        for attrs in fixture_type_attributes.values():
+            all_selected_attributes.extend(attrs)
+        all_selected_attributes = sorted(list(set(all_selected_attributes)))
+        
+        # Generate summary
+        summary = self._generate_summary_by_type(fixtures_with_addresses, fixture_type_attributes)
+        
+        # Generate export data
+        export_data = self._generate_export_data_by_type(fixtures_with_addresses, fixture_type_attributes, output_format, ma3_config)
+        
+        # Generate validation info
+        validation_info = self._generate_validation_info_by_type(fixtures, fixture_type_attributes)
+        
+        return AnalysisResults(
+            fixtures=fixtures_with_addresses,
+            summary=summary,
+            selected_attributes=all_selected_attributes,
+            output_format=output_format,
+            export_data=export_data,
+            validation_info=validation_info
+        )
     
     def _calculate_fixture_addresses(self, fixture: FixtureMatch, selected_attributes: List[str]) -> Dict[str, Dict[str, int]]:
         """Calculate absolute addresses for a single fixture."""
@@ -473,25 +562,27 @@ class MVRService:
             lines.append(f"Base Address: {fixture.base_address}")
             
             # Attributes section
-            if hasattr(fixture, 'absolute_addresses') and fixture.absolute_addresses:
-                lines.append("")
-                lines.append("Attributes:")
-                for attr_name in selected_attributes:
-                    if attr_name in fixture.absolute_addresses:
-                        addr_info = fixture.absolute_addresses[attr_name]
-                        universe = addr_info["universe"]
-                        channel = addr_info["channel"]
-                        absolute_address = addr_info["absolute_address"]
-                        lines.append(f"  • {attr_name:15} → DMX {absolute_address:3d} (Universe {universe:3d}, Channel {channel:3d})")
-                
-                # Show total channels used by this fixture
-                total_attrs = len([attr for attr in selected_attributes if attr in fixture.absolute_addresses])
-                lines.append(f"  Total attributes: {total_attrs}")
-            else:
-                lines.append("")
-                lines.append("Attributes: None available")
+            fixture_attributes = [attr for attr in selected_attributes 
+                                if attr in fixture.attribute_offsets]
             
-            lines.append("")
+            if fixture_attributes:
+                lines.append("\nAttributes:")
+                
+                for attr_name in fixture_attributes:
+                    sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                    universe, channel = fixture.get_address_for_attribute(attr_name)
+                    absolute_dmx = (universe - 1) * 512 + channel
+                    activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                    
+                    attr_line = f"  • {attr_name}"
+                    if activation_group:
+                        attr_line += f" (ActivationGroup: {activation_group})"
+                    attr_line += f" → Seq: {sequence_num}, Universe: {universe}, Channel: {channel}, Absolute: {absolute_dmx}"
+                    lines.append(attr_line)
+            else:
+                lines.append("\nAttributes: None available")
+            
+            lines.append("")  # Empty line separator
         
         return "\n".join(lines)
     
@@ -516,89 +607,97 @@ class MVRService:
             lines.append(f"Base Address: {fixture.base_address}")
             
             # Attributes section
-            if hasattr(fixture, 'absolute_addresses') and fixture.absolute_addresses:
-                lines.append("")
-                lines.append("Attributes:")
-                for attr_name in selected_attributes:
-                    if attr_name in fixture.absolute_addresses:
-                        addr_info = fixture.absolute_addresses[attr_name]
-                        universe = addr_info["universe"]
-                        channel = addr_info["channel"]
-                        absolute_address = addr_info["absolute_address"]
-                        lines.append(f"  • {attr_name:15} → DMX {absolute_address:3d} (Universe {universe:3d}, Channel {channel:3d})")
-                
-                # Show total channels used by this fixture
-                total_attrs = len([attr for attr in selected_attributes if attr in fixture.absolute_addresses])
-                lines.append(f"  Total attributes: {total_attrs}")
-            else:
-                lines.append("")
-                lines.append("Attributes: None available")
+            fixture_attributes = [attr for attr in selected_attributes 
+                                if attr in fixture.attribute_offsets]
             
-            lines.append("")
+            if fixture_attributes:
+                lines.append("\nAttributes:")
+                
+                for attr_name in fixture_attributes:
+                    sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                    universe, channel = fixture.get_address_for_attribute(attr_name)
+                    absolute_dmx = (universe - 1) * 512 + channel
+                    activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                    
+                    attr_line = f"  • {attr_name}"
+                    if activation_group:
+                        attr_line += f" (ActivationGroup: {activation_group})"
+                    attr_line += f" → Seq: {sequence_num}, Universe: {universe}, Channel: {channel}, Absolute: {absolute_dmx}"
+                    lines.append(attr_line)
+            else:
+                lines.append("\nAttributes: None available")
+            
+            lines.append("")  # Empty line separator
         
         return "\n".join(lines)
     
     def _export_csv(self, fixtures: List[FixtureMatch], selected_attributes: List[str]) -> str:
-        """Export results as CSV with fixtures as parent containers."""
+        """Export results as CSV format with fixtures as parent containers."""
         output = io.StringIO()
         writer = csv.writer(output)
         
         # Write header
-        writer.writerow(["Type", "Fixture Name", "Fixture ID", "GDTF Type", "Mode", "Base Address", "Attribute", "Universe", "Channel", "Absolute DMX"])
+        writer.writerow(["Type", "Fixture Name", "Fixture ID", "GDTF Type", "Mode", "Base Address", "Attribute", "ActivationGroup", "Sequence", "Universe", "Channel", "Absolute DMX"])
         
         # Sort fixtures by fixture_id in ascending order
         sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
                                 key=lambda x: x.fixture_id)
         
-        # Write data grouped by fixture
         for fixture in sorted_fixtures:
-            if hasattr(fixture, 'absolute_addresses') and fixture.absolute_addresses:
-                # Get attributes for this fixture
-                fixture_attributes = []
-                for attr_name in selected_attributes:
-                    if attr_name in fixture.absolute_addresses:
-                        addr_info = fixture.absolute_addresses[attr_name]
-                        universe = addr_info["universe"]
-                        channel = addr_info["channel"]
-                        absolute_address = addr_info["absolute_address"]
-                        fixture_attributes.append((attr_name, universe, channel, absolute_address))
+            fixture_attributes = [attr for attr in selected_attributes 
+                                if attr in fixture.attribute_offsets]
+            
+            if fixture_attributes:
+                # First row with fixture info
+                first_attr = fixture_attributes[0]
+                sequence_num = fixture.get_sequence_for_attribute(first_attr)
+                universe, channel = fixture.get_address_for_attribute(first_attr)
+                absolute_dmx = (universe - 1) * 512 + channel
+                activation_group = fixture.get_activation_group_for_attribute(first_attr)
                 
-                if fixture_attributes:
-                    # Write fixture header row
+                writer.writerow([
+                    "Fixture",
+                    fixture.name,
+                    fixture.fixture_id,
+                    fixture.gdtf_spec,
+                    fixture.gdtf_mode,
+                    fixture.base_address,
+                    first_attr,
+                    activation_group or "",
+                    sequence_num,
+                    universe,
+                    channel,
+                    absolute_dmx
+                ])
+                
+                # Subsequent rows for remaining attributes
+                for attr_name in fixture_attributes[1:]:
+                    sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                    universe, channel = fixture.get_address_for_attribute(attr_name)
+                    absolute_dmx = (universe - 1) * 512 + channel
+                    activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                    
                     writer.writerow([
-                        "FIXTURE",
-                        fixture.name,
-                        fixture.fixture_id,
-                        fixture.gdtf_spec,
-                        fixture.gdtf_mode,
-                        fixture.base_address,
-                        f"{len(fixture_attributes)} attributes",
-                        "",
-                        "",
-                        ""
+                        "",  # No type repetition
+                        "",  # No name repetition
+                        "",  # No fixture ID repetition
+                        "",  # No GDTF type repetition
+                        "",  # No mode repetition
+                        "",  # No base address repetition
+                        attr_name,
+                        activation_group or "",
+                        sequence_num,
+                        universe,
+                        channel,
+                        absolute_dmx
                     ])
-                    
-                    # Write attribute rows
-                    for attr_name, universe, channel, absolute_address in fixture_attributes:
-                        writer.writerow([
-                            "ATTRIBUTE",
-                            "",  # No fixture name repetition
-                            "",  # No fixture ID repetition
-                            "",  # No type repetition
-                            "",  # No mode repetition
-                            "",  # No base address repetition
-                            attr_name,
-                            universe,
-                            channel,
-                            absolute_address
-                        ])
-                    
-                    # Add separator row
-                    writer.writerow(["", "", "", "", "", "", "", "", "", ""])
+                
+                # Add separator row
+                writer.writerow(["", "", "", "", "", "", "", "", "", "", "", ""])
             else:
                 # Fixture with no attributes
                 writer.writerow([
-                    "FIXTURE",
+                    "Fixture",
                     fixture.name,
                     fixture.fixture_id,
                     fixture.gdtf_spec,
@@ -607,78 +706,83 @@ class MVRService:
                     "No attributes",
                     "",
                     "",
+                    "",
+                    "",
                     ""
                 ])
-                writer.writerow(["", "", "", "", "", "", "", "", "", ""])
+                writer.writerow(["", "", "", "", "", "", "", "", "", "", "", ""])
         
         return output.getvalue()
     
     def _export_csv_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]]) -> str:
-        """Export results as CSV with per-fixture-type attributes."""
+        """Export results as CSV format with per-fixture-type attributes."""
         output = io.StringIO()
         writer = csv.writer(output)
         
         # Write header
-        writer.writerow(["Type", "Fixture Name", "Fixture ID", "GDTF Type", "Mode", "Base Address", "Attribute", "Universe", "Channel", "Absolute DMX"])
+        writer.writerow(["Type", "Fixture Name", "Fixture ID", "GDTF Type", "Mode", "Base Address", "Attribute", "ActivationGroup", "Sequence", "Universe", "Channel", "Absolute DMX"])
         
         # Sort fixtures by fixture_id in ascending order
         sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
                                 key=lambda x: x.fixture_id)
         
-        # Write data grouped by fixture
         for fixture in sorted_fixtures:
             fixture_type = fixture.gdtf_spec or "Unknown"
             # Remove .gdtf extension for consistent naming
             fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
             selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
             
-            if hasattr(fixture, 'absolute_addresses') and fixture.absolute_addresses:
-                # Get attributes for this fixture
-                fixture_attributes = []
-                for attr_name in selected_attributes:
-                    if attr_name in fixture.absolute_addresses:
-                        addr_info = fixture.absolute_addresses[attr_name]
-                        universe = addr_info["universe"]
-                        channel = addr_info["channel"]
-                        absolute_address = addr_info["absolute_address"]
-                        fixture_attributes.append((attr_name, universe, channel, absolute_address))
+            fixture_attributes = [attr for attr in selected_attributes 
+                                if attr in fixture.attribute_offsets]
+            
+            if fixture_attributes:
+                # First row with fixture info
+                first_attr = fixture_attributes[0]
+                sequence_num = fixture.get_sequence_for_attribute(first_attr)
+                universe, channel = fixture.get_address_for_attribute(first_attr)
+                absolute_dmx = (universe - 1) * 512 + channel
+                activation_group = fixture.get_activation_group_for_attribute(first_attr)
                 
-                if fixture_attributes:
-                    # Write fixture header row
+                writer.writerow([
+                    "Fixture",
+                    fixture.name,
+                    fixture.fixture_id,
+                    fixture.gdtf_spec,
+                    fixture.gdtf_mode,
+                    fixture.base_address,
+                    first_attr,
+                    activation_group or "",
+                    sequence_num,
+                    universe,
+                    channel,
+                    absolute_dmx
+                ])
+                
+                # Subsequent rows for remaining attributes
+                for attr_name in fixture_attributes[1:]:
+                    sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                    universe, channel = fixture.get_address_for_attribute(attr_name)
+                    absolute_dmx = (universe - 1) * 512 + channel
+                    activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                    
                     writer.writerow([
-                        "FIXTURE",
-                        fixture.name,
-                        fixture.fixture_id,
-                        fixture.gdtf_spec,
-                        fixture.gdtf_mode,
-                        fixture.base_address,
-                        f"{len(fixture_attributes)} attributes",
-                        "",
-                        "",
-                        ""
+                        "",  # No type repetition
+                        "",  # No name repetition
+                        "",  # No fixture ID repetition
+                        "",  # No GDTF type repetition
+                        "",  # No mode repetition
+                        "",  # No base address repetition
+                        attr_name,
+                        activation_group or "",
+                        sequence_num,
+                        universe,
+                        channel,
+                        absolute_dmx
                     ])
-                    
-                    # Write attribute rows
-                    for attr_name, universe, channel, absolute_address in fixture_attributes:
-                        writer.writerow([
-                            "ATTRIBUTE",
-                            "",  # No fixture name repetition
-                            "",  # No fixture ID repetition
-                            "",  # No type repetition
-                            "",  # No mode repetition
-                            "",  # No base address repetition
-                            attr_name,
-                            universe,
-                            channel,
-                            absolute_address
-                        ])
-                    
-                    # Add separator row
-                    writer.writerow(["", "", "", "", "", "", "", "", "", ""])
             else:
                 # Fixture with no attributes
                 writer.writerow([
-                    "FIXTURE",
+                    "Fixture",
                     fixture.name,
                     fixture.fixture_id,
                     fixture.gdtf_spec,
@@ -687,77 +791,80 @@ class MVRService:
                     "No attributes",
                     "",
                     "",
+                    "",
+                    "",
                     ""
                 ])
-                writer.writerow(["", "", "", "", "", "", "", "", "", ""])
         
         return output.getvalue()
     
     def _export_json(self, fixtures: List[FixtureMatch], selected_attributes: List[str]) -> str:
-        """Export results as JSON with fixtures as parent containers."""
-        data = {
-            "analysis_summary": {
+        """Export results as JSON format."""
+        result = {
+            "fixtures": [],
+            "summary": {
                 "total_fixtures": len([f for f in fixtures if f.is_matched()]),
-                "attributes_analyzed": selected_attributes,
-                "export_timestamp": self._get_timestamp()
-            },
-            "fixtures": []
+                "total_attributes": 0
+            }
         }
         
         # Sort fixtures by fixture_id in ascending order
         sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
                                 key=lambda x: x.fixture_id)
+        
+        total_attributes = 0
         
         for fixture in sorted_fixtures:
-            # Build attributes list
-            attributes_list = []
-            if hasattr(fixture, 'absolute_addresses'):
-                for attr_name in selected_attributes:
-                    if attr_name in fixture.absolute_addresses:
-                        addr_info = fixture.absolute_addresses[attr_name]
-                        universe = addr_info["universe"]
-                        channel = addr_info["channel"]
-                        absolute_address = addr_info["absolute_address"]
-                        attributes_list.append({
-                            "name": attr_name,
-                            "universe": universe,
-                            "channel": channel,
-                            "absolute_dmx": absolute_address,
-                            "address": f"{universe}.{channel}"
-                        })
+            fixture_attributes = [attr for attr in selected_attributes 
+                                if attr in fixture.attribute_offsets]
             
-            fixture_data = {
-                "fixture_info": {
-                    "name": fixture.name,
-                    "fixture_id": fixture.fixture_id,
-                    "gdtf_type": fixture.gdtf_spec,
-                    "mode": fixture.gdtf_mode,
-                    "base_address": fixture.base_address
-                },
-                "attributes": {
-                    "count": len(attributes_list),
-                    "details": attributes_list
-                }
+            attributes_data = []
+            for attr_name in fixture_attributes:
+                sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                universe, channel = fixture.get_address_for_attribute(attr_name)
+                absolute_dmx = (universe - 1) * 512 + channel
+                activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                
+                attributes_data.append({
+                    "name": attr_name,
+                    "activation_group": activation_group,
+                    "sequence": sequence_num,
+                    "universe": universe,
+                    "channel": channel,
+                    "absolute_dmx": absolute_dmx
+                })
+            
+            total_attributes += len(attributes_data)
+            
+            fixture_info = {
+                "fixture_id": fixture.fixture_id,
+                "name": fixture.name,
+                "gdtf_spec": fixture.gdtf_spec,
+                "gdtf_mode": fixture.gdtf_mode,
+                "base_address": fixture.base_address,
+                "attributes": attributes_data
             }
             
-            data["fixtures"].append(fixture_data)
+            result["fixtures"].append(fixture_info)
         
-        return json.dumps(data, indent=2)
+        result["summary"]["total_attributes"] = total_attributes
+        return json.dumps(result, indent=2)
     
     def _export_json_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]]) -> str:
-        """Export results as JSON with per-fixture-type attributes."""
-        data = {
-            "analysis_summary": {
+        """Export results as JSON format with per-fixture-type attributes."""
+        result = {
+            "fixtures": [],
+            "summary": {
                 "total_fixtures": len([f for f in fixtures if f.is_matched()]),
-                "fixture_type_attributes": fixture_type_attributes,
-                "export_timestamp": self._get_timestamp()
-            },
-            "fixtures": []
+                "total_attributes": 0
+            }
         }
         
         # Sort fixtures by fixture_id in ascending order
         sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
                                 key=lambda x: x.fixture_id)
+        
+        total_attributes = 0
         
         for fixture in sorted_fixtures:
             fixture_type = fixture.gdtf_spec or "Unknown"
@@ -765,40 +872,40 @@ class MVRService:
             fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
             selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
             
-            # Build attributes list
-            attributes_list = []
-            if hasattr(fixture, 'absolute_addresses'):
-                for attr_name in selected_attributes:
-                    if attr_name in fixture.absolute_addresses:
-                        addr_info = fixture.absolute_addresses[attr_name]
-                        universe = addr_info["universe"]
-                        channel = addr_info["channel"]
-                        absolute_address = addr_info["absolute_address"]
-                        attributes_list.append({
-                            "name": attr_name,
-                            "universe": universe,
-                            "channel": channel,
-                            "absolute_dmx": absolute_address,
-                            "address": f"{universe}.{channel}"
-                        })
+            fixture_attributes = [attr for attr in selected_attributes 
+                                if attr in fixture.attribute_offsets]
             
-            fixture_data = {
-                "fixture_info": {
-                    "name": fixture.name,
-                    "fixture_id": fixture.fixture_id,
-                    "gdtf_type": fixture.gdtf_spec,
-                    "mode": fixture.gdtf_mode,
-                    "base_address": fixture.base_address
-                },
-                "attributes": {
-                    "count": len(attributes_list),
-                    "details": attributes_list
-                }
+            attributes_data = []
+            for attr_name in fixture_attributes:
+                sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                universe, channel = fixture.get_address_for_attribute(attr_name)
+                absolute_dmx = (universe - 1) * 512 + channel
+                activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                
+                attributes_data.append({
+                    "name": attr_name,
+                    "activation_group": activation_group,
+                    "sequence": sequence_num,
+                    "universe": universe,
+                    "channel": channel,
+                    "absolute_dmx": absolute_dmx
+                })
+            
+            total_attributes += len(attributes_data)
+            
+            fixture_info = {
+                "fixture_id": fixture.fixture_id,
+                "name": fixture.name,
+                "gdtf_spec": fixture.gdtf_spec,
+                "gdtf_mode": fixture.gdtf_mode,
+                "base_address": fixture.base_address,
+                "attributes": attributes_data
             }
             
-            data["fixtures"].append(fixture_data)
+            result["fixtures"].append(fixture_info)
         
-        return json.dumps(data, indent=2)
+        result["summary"]["total_attributes"] = total_attributes
+        return json.dumps(result, indent=2)
     
     def _get_timestamp(self) -> str:
         """Get current timestamp for export."""
@@ -835,6 +942,12 @@ class MVRService:
                         remote_name = f"{fixture.fixture_id}_{fixture.name}_{attr_name}"
                         dmx_remote.set("Name", remote_name)
                         dmx_remote.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                        
+                        # Add sequence target if sequence number is available
+                        sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                        if sequence_num:
+                            dmx_remote.set("Target", f"ShowData.DataPools.Default.Sequences.{sequence_num}")
+                        
                         dmx_remote.set("TriggerOn", self._value_to_hex(ma3_config["trigger_on"]))
                         dmx_remote.set("TriggerOff", self._value_to_hex(ma3_config["trigger_off"]))
                         dmx_remote.set("InFrom", self._value_to_hex(ma3_config["in_from"]))
@@ -895,6 +1008,12 @@ class MVRService:
                         remote_name = f"{fixture.fixture_id}_{fixture.name}_{attr_name}"
                         dmx_remote.set("Name", remote_name)
                         dmx_remote.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                        
+                        # Add sequence target if sequence number is available
+                        sequence_num = fixture.get_sequence_for_attribute(attr_name)
+                        if sequence_num:
+                            dmx_remote.set("Target", f"ShowData.DataPools.Default.Sequences.{sequence_num}")
+                        
                         dmx_remote.set("TriggerOn", self._value_to_hex(ma3_config["trigger_on"]))
                         dmx_remote.set("TriggerOff", self._value_to_hex(ma3_config["trigger_off"]))
                         dmx_remote.set("InFrom", self._value_to_hex(ma3_config["in_from"]))

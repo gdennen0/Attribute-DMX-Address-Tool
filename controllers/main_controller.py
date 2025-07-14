@@ -329,13 +329,14 @@ class MVRController:
                 "details": traceback.format_exc()
             }
     
-    def analyze_fixtures_by_type(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None) -> Dict[str, Any]:
+    def analyze_fixtures_by_type(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1) -> Dict[str, Any]:
         """
         Analyze fixtures with per-fixture-type attributes.
         
         Args:
             fixture_type_attributes: Dict mapping fixture_type -> list of attribute names
             output_format: Format for output data
+            sequence_start: Starting number for global sequence numbering
             
         Returns:
             Dict containing analysis results
@@ -357,7 +358,7 @@ class MVRController:
             
             # Run analysis per fixture type
             results = self.mvr_service.analyze_fixtures_by_type(
-                self.matched_fixtures, fixture_type_attributes, output_format, ma3_config
+                self.matched_fixtures, fixture_type_attributes, output_format, ma3_config, sequence_start
             )
             
             # Store results
@@ -373,8 +374,7 @@ class MVRController:
         except Exception as e:
             return {
                 "success": False,
-                "error": str(e),
-                "details": traceback.format_exc()
+                "error": str(e)
             }
     
     def export_results(self, results: Dict[str, Any], output_format: str, file_path: str, ma3_config: dict = None) -> Dict[str, Any]:
@@ -745,6 +745,9 @@ class MVRController:
             # Store results
             self.alignment_results = alignment_results
             
+            # Automatically assign sequences to aligned remote fixtures
+            sequence_assignments = self._assign_sequences_to_aligned_remote_fixtures()
+            
             # Calculate summary statistics
             total_alignments = len(alignment_results)
             matched_count = sum(1 for result in alignment_results if result["alignment_status"] == "matched")
@@ -758,7 +761,8 @@ class MVRController:
                 "matched_count": matched_count,
                 "unmatched_master_count": unmatched_master,
                 "unmatched_remote_count": unmatched_remote,
-                "alignment_percentage": (matched_count / len(self.master_matched_fixtures)) * 100 if self.master_matched_fixtures else 0
+                "alignment_percentage": (matched_count / len(self.master_matched_fixtures)) * 100 if self.master_matched_fixtures else 0,
+                "sequence_assignments": sequence_assignments
             }
             
         except Exception as e:
@@ -919,6 +923,9 @@ class MVRController:
         """Set a manual alignment between master and remote fixtures."""
         if remote_fixture_id:
             self.manual_alignments[master_fixture_id] = remote_fixture_id
+            
+            # Automatically assign sequences from master to remote fixture
+            self._assign_sequences_for_manual_alignment(master_fixture_id, remote_fixture_id)
         else:
             # Remove alignment if remote_fixture_id is None
             if master_fixture_id in self.manual_alignments:
@@ -995,6 +1002,9 @@ class MVRController:
             # Store results
             self.alignment_results = alignment_results
             
+            # Automatically assign sequences to aligned remote fixtures
+            sequence_assignments = self._assign_sequences_to_aligned_remote_fixtures()
+            
             # Calculate summary statistics
             total_alignments = len(alignment_results)
             matched_count = sum(1 for result in alignment_results if result["alignment_status"] == "matched")
@@ -1008,7 +1018,8 @@ class MVRController:
                 "matched_count": matched_count,
                 "unmatched_master_count": unmatched_master,
                 "unmatched_remote_count": unmatched_remote,
-                "alignment_percentage": (matched_count / len(self.master_matched_fixtures)) * 100 if self.master_matched_fixtures else 0
+                "alignment_percentage": (matched_count / len(self.master_matched_fixtures)) * 100 if self.master_matched_fixtures else 0,
+                "sequence_assignments": sequence_assignments
             }
             
         except Exception as e:
@@ -1016,7 +1027,7 @@ class MVRController:
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
-    def analyze_master_fixtures(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None) -> Dict[str, Any]:
+    def analyze_master_fixtures(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1) -> Dict[str, Any]:
         """
         Analyze master fixtures with selected attributes.
         
@@ -1024,6 +1035,7 @@ class MVRController:
             fixture_type_attributes: Dict mapping fixture types to their selected attributes
             output_format: Output format ('text', 'csv', 'json', 'ma3_xml')
             ma3_config: Configuration for MA3 XML export
+            sequence_start: Starting number for global sequence numbering
             
         Returns:
             Dict containing analysis results
@@ -1036,7 +1048,7 @@ class MVRController:
             original_fixtures = self.matched_fixtures
             self.matched_fixtures = self.master_matched_fixtures
             
-            result = self.analyze_fixtures_by_type(fixture_type_attributes, output_format, ma3_config)
+            result = self.analyze_fixtures_by_type(fixture_type_attributes, output_format, ma3_config, sequence_start)
             
             # Restore original fixtures
             self.matched_fixtures = original_fixtures
@@ -1054,14 +1066,16 @@ class MVRController:
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
-    def analyze_remote_fixtures(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None) -> Dict[str, Any]:
+    def analyze_remote_fixtures(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1) -> Dict[str, Any]:
         """
         Analyze remote fixtures with selected attributes.
+        Note: Remote fixtures will not get sequence numbers assigned initially - sequences are blank until assigned via routing.
         
         Args:
             fixture_type_attributes: Dict mapping fixture types to their selected attributes
             output_format: Output format ('text', 'csv', 'json', 'ma3_xml')
             ma3_config: Configuration for MA3 XML export
+            sequence_start: Starting number for global sequence numbering (not used for remote fixtures)
             
         Returns:
             Dict containing analysis results
@@ -1070,24 +1084,32 @@ class MVRController:
             if not self.remote_matched_fixtures:
                 return {"success": False, "error": "No remote fixtures loaded"}
             
-            # Use the existing analysis method but with remote fixtures
-            original_fixtures = self.matched_fixtures
-            self.matched_fixtures = self.remote_matched_fixtures
+            # Use MVR service to analyze remote fixtures without sequence assignment
+            analysis_results = self.mvr_service.analyze_fixtures_by_type_without_sequences(
+                self.remote_matched_fixtures, 
+                fixture_type_attributes, 
+                output_format, 
+                ma3_config
+            )
             
-            result = self.analyze_fixtures_by_type(fixture_type_attributes, output_format, ma3_config)
+            # Update the remote matched fixtures with the results
+            self.remote_matched_fixtures = analysis_results.fixtures
             
-            # Restore original fixtures
-            self.matched_fixtures = original_fixtures
-            
-            if result["success"]:
-                result["dataset_type"] = "remote"
+            # Return the same structure as master analysis for consistency
+            result = {
+                "success": True,
+                "analysis_results": analysis_results,  # Keep the full results object
+                "summary": analysis_results.summary,
+                "export_data": analysis_results.export_data,
+                "dataset_type": "remote",
+                # Add summary fields at top level for backward compatibility
+                "total_fixtures": analysis_results.summary.get("total_fixtures", 0),
+                "matched_fixtures": analysis_results.summary.get("matched_fixtures", 0)
+            }
             
             return result
             
         except Exception as e:
-            # Restore original fixtures in case of error
-            if 'original_fixtures' in locals():
-                self.matched_fixtures = original_fixtures
             import traceback
             traceback.print_exc()
             return {"success": False, "error": str(e)}
@@ -1237,3 +1259,65 @@ class MVRController:
         self.matched_fixtures = original_fixtures
         
         return fixture_types
+
+    def _assign_sequences_to_aligned_remote_fixtures(self):
+        """
+        Automatically assign sequences to remote fixtures that are aligned with master fixtures.
+        This ensures remote fixtures get proper sequence numbers for export.
+        """
+        if not self.alignment_results:
+            return
+        
+        sequence_assignments = 0
+        
+        for alignment_result in self.alignment_results:
+            if alignment_result["alignment_status"] == "matched":
+                master_fixture = alignment_result["master_fixture"]
+                remote_fixture = alignment_result["remote_fixture"]
+                
+                # Copy sequences from master to remote fixture
+                if hasattr(master_fixture, 'attribute_sequences') and master_fixture.attribute_sequences:
+                    if not hasattr(remote_fixture, 'attribute_sequences') or remote_fixture.attribute_sequences is None:
+                        remote_fixture.attribute_sequences = {}
+                    
+                    # Copy sequences for matching attributes
+                    for attr_name, sequence_num in master_fixture.attribute_sequences.items():
+                        if attr_name in remote_fixture.attribute_offsets:
+                            remote_fixture.attribute_sequences[attr_name] = sequence_num
+                            sequence_assignments += 1
+        
+        return sequence_assignments
+
+    def _assign_sequences_for_manual_alignment(self, master_fixture_id: str, remote_fixture_id: str):
+        """
+        Assign sequences from a master fixture to a remote fixture for manual alignment.
+        """
+        try:
+            # Find the master fixture
+            master_fixture = None
+            for fixture in self.master_matched_fixtures:
+                if str(fixture.fixture_id) == str(master_fixture_id):
+                    master_fixture = fixture
+                    break
+            
+            # Find the remote fixture
+            remote_fixture = None
+            for fixture in self.remote_matched_fixtures:
+                if str(fixture.fixture_id) == str(remote_fixture_id):
+                    remote_fixture = fixture
+                    break
+            
+            # Assign sequences if both fixtures found
+            if master_fixture and remote_fixture:
+                if hasattr(master_fixture, 'attribute_sequences') and master_fixture.attribute_sequences:
+                    if not hasattr(remote_fixture, 'attribute_sequences') or remote_fixture.attribute_sequences is None:
+                        remote_fixture.attribute_sequences = {}
+                    
+                    # Copy sequences for matching attributes
+                    for attr_name, sequence_num in master_fixture.attribute_sequences.items():
+                        if attr_name in remote_fixture.attribute_offsets:
+                            remote_fixture.attribute_sequences[attr_name] = sequence_num
+                            
+        except Exception as e:
+            # Log error but don't fail the alignment
+            print(f"Error assigning sequences for manual alignment: {e}")

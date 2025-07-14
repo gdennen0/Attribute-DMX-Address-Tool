@@ -133,8 +133,9 @@ class GDTFService:
                         if not mode_name:
                             continue
                         
-                        # Extract channels for this mode
+                        # Extract channels and activation groups for this mode
                         channels = {}
+                        activation_groups = {}
                         
                         # Look for DMXChannels structure
                         dmx_channels_elem = mode_elem.find('DMXChannels')
@@ -158,13 +159,15 @@ class GDTFService:
                                 # Find the LogicalChannel within this DMXChannel
                                 logical_channel = dmx_channel_elem.find('LogicalChannel')
                                 if logical_channel is not None:
-                                    attribute_name = self._extract_attribute_name_from_logical_channel(logical_channel, root)
+                                    attribute_name, activation_group = self._extract_attribute_info_from_logical_channel(logical_channel, root)
                                     if attribute_name and attribute_name != "NoFeature":
                                         channels[attribute_name] = channel_offset
+                                        activation_groups[attribute_name] = activation_group
                         
                         gdtf_mode = GDTFMode(
                             name=mode_name,
                             channels=channels,
+                            activation_groups=activation_groups,
                             total_channels=len(channels)
                         )
                         modes[mode_name] = gdtf_mode
@@ -195,25 +198,33 @@ class GDTFService:
         except Exception:
             return None
     
-    def _extract_attribute_name_from_logical_channel(self, logical_channel_elem, root) -> Optional[str]:
-        """Extract attribute name from a LogicalChannel element."""
+    def _extract_attribute_info_from_logical_channel(self, logical_channel_elem, root) -> tuple[Optional[str], Optional[str]]:
+        """Extract attribute name and activation group from a LogicalChannel element."""
         try:
             # Look for the attribute reference in the logical channel
             attribute_ref = logical_channel_elem.get('Attribute')
             if not attribute_ref:
-                return None
+                return None, None
             
             # Find the attribute definition
             for attr_elem in root.findall('.//Attribute'):
                 if attr_elem.get('Name') == attribute_ref:
-                    # Return the Pretty name if available, otherwise the Name
-                    return attr_elem.get('Pretty', attr_elem.get('Name'))
+                    # Get the Pretty name if available, otherwise the Name
+                    attribute_name = attr_elem.get('Pretty', attr_elem.get('Name'))
+                    # Get the ActivationGroup
+                    activation_group = attr_elem.get('ActivationGroup')
+                    return attribute_name, activation_group
             
-            # If not found, return the reference as-is
-            return attribute_ref
+            # If not found, return the reference as-is with no activation group
+            return attribute_ref, None
             
         except Exception:
-            return None
+            return None, None
+    
+    def _extract_attribute_name_from_logical_channel(self, logical_channel_elem, root) -> Optional[str]:
+        """Extract attribute name from a LogicalChannel element (deprecated - use _extract_attribute_info_from_logical_channel)."""
+        attribute_name, _ = self._extract_attribute_info_from_logical_channel(logical_channel_elem, root)
+        return attribute_name
     
     def match_fixture_objects(self, fixtures: List[FixtureMatch], profiles: Dict[str, GDTFProfile] = None) -> List[FixtureMatch]:
         """
@@ -278,6 +289,7 @@ class GDTFService:
         fixture.gdtf_profile = gdtf_profile
         fixture.matched_mode = matched_mode
         fixture.attribute_offsets = matched_mode.channels.copy()
+        fixture.attribute_activation_groups = matched_mode.activation_groups.copy()
         fixture.match_status = "matched"
         
         return fixture
@@ -312,11 +324,12 @@ class GDTFService:
         fixture.gdtf_profile = profile
         fixture.matched_mode = mode
         fixture.attribute_offsets = mode.channels.copy()
+        fixture.attribute_activation_groups = mode.activation_groups.copy()
         fixture.match_status = "matched"
         
         return fixture
     
-    def calculate_absolute_addresses(self, fixture: FixtureMatch, selected_attributes: List[str]) -> Dict[str, tuple]:
+    def calculate_absolute_addresses(self, fixture: FixtureMatch, selected_attributes: List[str]) -> Dict[str, Dict[str, int]]:
         """
         Calculate absolute DMX addresses for selected attributes.
         
@@ -325,25 +338,32 @@ class GDTFService:
             selected_attributes: List of attribute names to calculate
             
         Returns:
-            Dictionary mapping attribute_name -> (universe, channel)
+            Dictionary mapping attribute_name -> {"universe": X, "channel": Y, "absolute_address": Z}
         """
         if not fixture.is_matched():
             return {}
-        
+
         addresses = {}
         base_address = fixture.base_address
-        
+
         for attr_name in selected_attributes:
             if attr_name in fixture.attribute_offsets:
                 offset = fixture.attribute_offsets[attr_name]
-                absolute_address = base_address + offset - 1  # Convert to 0-based
+                # Calculate absolute DMX address (1-based)
+                # base_address is 1-based, offset is 1-based from GDTF
+                absolute_address = base_address + (offset - 1)
                 
-                # Calculate universe and channel
-                universe = (absolute_address // self.universe_size) + 1
-                channel = (absolute_address % self.universe_size) + 1
+                # Calculate universe and channel (both 1-based)
+                # Convert to 0-based for calculation, then back to 1-based
+                universe = ((absolute_address - 1) // self.universe_size) + 1
+                channel = ((absolute_address - 1) % self.universe_size) + 1
                 
-                addresses[attr_name] = (universe, channel)
-        
+                addresses[attr_name] = {
+                    "universe": universe,
+                    "channel": channel,
+                    "absolute_address": absolute_address
+                }
+
         return addresses
     
     def get_available_attributes(self) -> List[str]:
