@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 
 import core
+from .gdtf_dialog import GDTFMatchingDialog
 
 
 class MVRImportDialog(QDialog):
@@ -66,16 +67,19 @@ class MVRImportDialog(QDialog):
         selection_layout = QHBoxLayout()
         self.select_all_button = QPushButton("Select All")
         self.select_none_button = QPushButton("Select None")
+        self.gdtf_matching_button = QPushButton("GDTF Profile Matching...")
         self.set_as_master_button = QPushButton("Set Selected as Master")
         self.set_as_remote_button = QPushButton("Set Selected as Remote")
         
         self.select_all_button.clicked.connect(self._select_all)
         self.select_none_button.clicked.connect(self._select_none)
+        self.gdtf_matching_button.clicked.connect(self._open_gdtf_matching)
         self.set_as_master_button.clicked.connect(self._set_selected_as_master)
         self.set_as_remote_button.clicked.connect(self._set_selected_as_remote)
         
         selection_layout.addWidget(self.select_all_button)
         selection_layout.addWidget(self.select_none_button)
+        selection_layout.addWidget(self.gdtf_matching_button)
         selection_layout.addStretch()
         selection_layout.addWidget(self.set_as_master_button)
         selection_layout.addWidget(self.set_as_remote_button)
@@ -279,6 +283,29 @@ class MVRImportDialog(QDialog):
             self.status_text.append(f"Set {selected_count} fixture{'s' if selected_count != 1 else ''} as remote")
         else:
             QMessageBox.information(self, "No Selection", "Please select fixtures to set as remote.")
+    
+    def _open_gdtf_matching(self):
+        """Open the GDTF profile matching dialog."""
+        if not self.fixtures:
+            QMessageBox.information(self, "No Fixtures", "Please load an MVR file first.")
+            return
+        
+        dialog = GDTFMatchingDialog(self.fixtures, self.config, self)
+        result = dialog.exec()
+        
+        if result == QDialog.DialogCode.Accepted:
+            # Apply the matches to fixtures
+            updated_count = dialog.apply_matches_to_fixtures()
+            
+            if updated_count > 0:
+                # Refresh the fixtures table to show updated match status
+                self._populate_table()
+                
+                # Show updated summary
+                summary = core.get_match_summary(self.fixtures)
+                self.status_text.append(f"GDTF matching complete: {summary['matched']}/{summary['total']} fixtures matched ({summary['match_rate']:.1f}%)")
+            else:
+                self.status_text.append("No GDTF matches were applied")
     
     def _update_import_button(self):
         """Update import button state based on selection."""
