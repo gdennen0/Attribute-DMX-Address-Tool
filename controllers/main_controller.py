@@ -329,7 +329,7 @@ class MVRController:
                 "details": traceback.format_exc()
             }
     
-    def analyze_fixtures_by_type(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1) -> Dict[str, Any]:
+    def analyze_fixtures_by_type(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1, table_order: List[tuple] = None) -> Dict[str, Any]:
         """
         Analyze fixtures with per-fixture-type attributes.
         
@@ -337,6 +337,7 @@ class MVRController:
             fixture_type_attributes: Dict mapping fixture_type -> list of attribute names
             output_format: Format for output data
             sequence_start: Starting number for global sequence numbering
+            table_order: Optional list of (fixture_id, attribute_name) tuples defining the order
             
         Returns:
             Dict containing analysis results
@@ -358,7 +359,7 @@ class MVRController:
             
             # Run analysis per fixture type
             results = self.mvr_service.analyze_fixtures_by_type(
-                self.matched_fixtures, fixture_type_attributes, output_format, ma3_config, sequence_start
+                self.matched_fixtures, fixture_type_attributes, output_format, ma3_config, sequence_start, table_order
             )
             
             # Store results
@@ -1027,15 +1028,16 @@ class MVRController:
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
-    def analyze_master_fixtures(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1) -> Dict[str, Any]:
+    def analyze_master_fixtures(self, fixture_type_attributes: Dict[str, List[str]], output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1, table_order: List[tuple] = None) -> Dict[str, Any]:
         """
         Analyze master fixtures with selected attributes.
         
         Args:
             fixture_type_attributes: Dict mapping fixture types to their selected attributes
-            output_format: Output format ('text', 'csv', 'json', 'ma3_xml')
+            output_format: Output format ('text', 'csv', 'json', 'ma3_xml', 'ma3_sequences')
             ma3_config: Configuration for MA3 XML export
             sequence_start: Starting number for global sequence numbering
+            table_order: Optional list of (fixture_id, attribute_name) tuples defining the order
             
         Returns:
             Dict containing analysis results
@@ -1048,7 +1050,7 @@ class MVRController:
             original_fixtures = self.matched_fixtures
             self.matched_fixtures = self.master_matched_fixtures
             
-            result = self.analyze_fixtures_by_type(fixture_type_attributes, output_format, ma3_config, sequence_start)
+            result = self.analyze_fixtures_by_type(fixture_type_attributes, output_format, ma3_config, sequence_start, table_order)
             
             # Restore original fixtures
             self.matched_fixtures = original_fixtures
@@ -1322,16 +1324,17 @@ class MVRController:
             # Log error but don't fail the alignment
             print(f"Error assigning sequences for manual alignment: {e}")
 
-    def export_remote_fixtures_direct(self, fixture_type_attributes: Dict[str, List[str]], output_format: str, file_path: str, ma3_config: dict = None) -> Dict[str, Any]:
+    def export_remote_fixtures_direct(self, fixture_type_attributes: Dict[str, List[str]], output_format: str, file_path: str, ma3_config: dict = None, table_order: List[tuple] = None) -> Dict[str, Any]:
         """
         Export remote fixtures directly without re-analyzing them.
         This preserves any sequences that were assigned during alignment.
         
         Args:
             fixture_type_attributes: Dict mapping fixture types to their selected attributes
-            output_format: Output format ('text', 'csv', 'json', 'ma3_xml')
+            output_format: Output format ('text', 'csv', 'json', 'ma3_xml', 'ma3_sequences')
             file_path: Path to save the export file
             ma3_config: Configuration for MA3 XML export
+            table_order: Optional list of (fixture_id, attribute_name) tuples defining the order
             
         Returns:
             Dict containing export results
@@ -1353,7 +1356,7 @@ class MVRController:
             summary = self.mvr_service._generate_summary_by_type(self.remote_matched_fixtures, fixture_type_attributes)
             
             # Generate export data from existing fixtures
-            export_data = self.mvr_service._generate_export_data_by_type(self.remote_matched_fixtures, fixture_type_attributes, output_format, ma3_config)
+            export_data = self.mvr_service._generate_export_data_by_type(self.remote_matched_fixtures, fixture_type_attributes, output_format, ma3_config, table_order)
             
             # Create analysis results object
             analysis_results = AnalysisResults(
@@ -1362,7 +1365,9 @@ class MVRController:
                 selected_attributes=all_selected_attributes,
                 output_format=output_format,
                 export_data=export_data,
-                validation_info={}
+                validation_info={},
+                table_order=table_order,
+                fixture_type_attributes=fixture_type_attributes
             )
             
             # Save to file
@@ -1384,7 +1389,7 @@ class MVRController:
             traceback.print_exc()
             return {"success": False, "error": str(e)}
 
-    def export_sequences_xml(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], file_path: str) -> Dict[str, Any]:
+    def export_sequences_xml(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], file_path: str, table_order: List[tuple] = None) -> Dict[str, Any]:
         """
         Export MA3 sequences XML for all fixtures and their attributes with values set to 100.
         
@@ -1392,6 +1397,7 @@ class MVRController:
             fixtures: List of FixtureMatch objects with sequence numbers assigned
             fixture_type_attributes: Dict mapping fixture types to their selected attributes
             file_path: Path to save the sequences XML file
+            table_order: Optional list of (fixture_id, attribute_name) tuples defining the order
             
         Returns:
             Dict containing export results
@@ -1404,7 +1410,7 @@ class MVRController:
                 return {"success": False, "error": "No fixture type attributes provided"}
             
             # Export sequences using the service
-            export_data = self.mvr_service._export_ma3_sequences_xml_by_type(fixtures, fixture_type_attributes)
+            export_data = self.mvr_service._export_ma3_sequences_xml_by_type(fixtures, fixture_type_attributes, table_order)
             
             # Save to file
             try:

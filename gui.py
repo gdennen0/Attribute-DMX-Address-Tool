@@ -4292,11 +4292,17 @@ class MVRApp(QMainWindow):
         if not self.master_fixture_type_attributes:
             return {"success": False, "error": "No master attributes selected"}
         
+        # Get table order for sequences export
+        table_order = None
+        if output_format == "ma3_sequences" and hasattr(self, 'master_table_order'):
+            table_order = self.master_table_order
+        
         # Analyze master fixtures
         result = self.controller.analyze_master_fixtures(
             self.master_fixture_type_attributes, 
             output_format, 
-            ma3_config
+            ma3_config,
+            table_order=table_order
         )
         
         if result["success"]:
@@ -4311,12 +4317,18 @@ class MVRApp(QMainWindow):
         if not self.remote_fixture_type_attributes:
             return {"success": False, "error": "No remote attributes selected"}
         
+        # Get table order for sequences export
+        table_order = None
+        if output_format == "ma3_sequences" and hasattr(self, 'remote_table_order'):
+            table_order = self.remote_table_order
+        
         # Export existing remote fixtures without re-analyzing (preserves assigned sequences)
         result = self.controller.export_remote_fixtures_direct(
             self.remote_fixture_type_attributes, 
             output_format, 
             file_path,
-            ma3_config
+            ma3_config,
+            table_order
         )
         
         return result
@@ -4353,10 +4365,15 @@ class MVRApp(QMainWindow):
                 "alignment_results": []
             }
             
+            # Get table order for sequences export
+            table_order = None
+            if output_format == "ma3_sequences" and hasattr(self, 'master_table_order'):
+                table_order = self.master_table_order
+            
             # Add master data if available
             if self.master_fixture_type_attributes:
                 master_result = self.controller.analyze_master_fixtures(
-                    self.master_fixture_type_attributes, "json"
+                    self.master_fixture_type_attributes, "json", table_order=table_order
                 )
                 if master_result["success"]:
                     combined_data["master_fixtures"] = self._extract_fixture_data(master_result)
@@ -4376,6 +4393,19 @@ class MVRApp(QMainWindow):
                 import json
                 with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump(combined_data, f, indent=2, default=str)
+            elif output_format == "ma3_sequences":
+                # For sequences export, use master fixtures to generate sequences XML
+                if self.master_fixture_type_attributes and self.controller.master_matched_fixtures:
+                    result = self.controller.export_sequences_xml(
+                        self.controller.master_matched_fixtures,
+                        self.master_fixture_type_attributes,
+                        file_path,
+                        table_order
+                    )
+                    if not result["success"]:
+                        return result
+                else:
+                    return {"success": False, "error": "No master fixtures available for sequences export"}
             else:
                 # For other formats, write a summary
                 self._write_combined_summary(file_path, combined_data)

@@ -93,6 +93,8 @@ class AnalysisResults:
     output_format: str
     export_data: str
     validation_info: Dict[str, Any]
+    table_order: Optional[List[tuple]] = None  # Store table order for export
+    fixture_type_attributes: Optional[Dict[str, List[str]]] = None  # Store fixture type attributes for per-fixture-type analysis
     
     def get_matched_fixtures(self) -> List[FixtureMatch]:
         """Get only successfully matched fixtures."""

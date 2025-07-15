@@ -174,7 +174,7 @@ class MVRService:
         return None
     
     def analyze_fixtures(self, fixtures: List[FixtureMatch], selected_attributes: List[str], 
-                        output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1) -> AnalysisResults:
+                        output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1, table_order: List[tuple] = None) -> AnalysisResults:
         """
         Analyze fixtures and calculate addresses for selected attributes.
         
@@ -183,6 +183,7 @@ class MVRService:
             selected_attributes: List of attribute names to analyze
             output_format: Output format for results
             sequence_start: Starting number for global sequence numbering
+            table_order: Optional list of (fixture_id, attribute_name) tuples defining the order
             
         Returns:
             AnalysisResults object with complete analysis
@@ -200,7 +201,7 @@ class MVRService:
         summary = self._generate_summary(fixtures_with_addresses, selected_attributes)
         
         # Generate export data
-        export_data = self._generate_export_data(fixtures_with_addresses, selected_attributes, output_format, ma3_config)
+        export_data = self._generate_export_data(fixtures_with_addresses, selected_attributes, output_format, ma3_config, table_order)
         
         # Generate validation info
         validation_info = self._generate_validation_info(fixtures, selected_attributes)
@@ -211,11 +212,12 @@ class MVRService:
             selected_attributes=selected_attributes,
             output_format=output_format,
             export_data=export_data,
-            validation_info=validation_info
+            validation_info=validation_info,
+            table_order=table_order
         )
     
     def analyze_fixtures_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], 
-                                output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1) -> AnalysisResults:
+                                output_format: str = "text", ma3_config: dict = None, sequence_start: int = 1, table_order: List[tuple] = None) -> AnalysisResults:
         """
         Analyze fixtures with per-fixture-type attributes.
         
@@ -224,6 +226,7 @@ class MVRService:
             fixture_type_attributes: Dict mapping fixture_type -> list of attribute names
             output_format: Output format for results
             sequence_start: Starting number for global sequence numbering
+            table_order: Optional list of (fixture_id, attribute_name) tuples defining the order
             
         Returns:
             AnalysisResults object with complete analysis
@@ -247,7 +250,7 @@ class MVRService:
         summary = self._generate_summary_by_type(fixtures_with_addresses, fixture_type_attributes)
         
         # Generate export data
-        export_data = self._generate_export_data_by_type(fixtures_with_addresses, fixture_type_attributes, output_format, ma3_config)
+        export_data = self._generate_export_data_by_type(fixtures_with_addresses, fixture_type_attributes, output_format, ma3_config, table_order)
         
         # Generate validation info
         validation_info = self._generate_validation_info_by_type(fixtures, fixture_type_attributes)
@@ -258,7 +261,9 @@ class MVRService:
             selected_attributes=all_selected_attributes,
             output_format=output_format,
             export_data=export_data,
-            validation_info=validation_info
+            validation_info=validation_info,
+            table_order=table_order,
+            fixture_type_attributes=fixture_type_attributes
         )
     
     def _calculate_addresses(self, fixtures: List[FixtureMatch], selected_attributes: List[str], sequence_start: int = 1) -> List[FixtureMatch]:
@@ -379,7 +384,8 @@ class MVRService:
             selected_attributes=all_selected_attributes,
             output_format=output_format,
             export_data=export_data,
-            validation_info=validation_info
+            validation_info=validation_info,
+            fixture_type_attributes=fixture_type_attributes
         )
     
     def _calculate_fixture_addresses(self, fixture: FixtureMatch, selected_attributes: List[str]) -> Dict[str, Dict[str, int]]:
@@ -516,7 +522,7 @@ class MVRService:
         summary["universes_used"] = sorted(list(summary["universes_used"]))
         return summary
     
-    def _generate_export_data(self, fixtures: List[FixtureMatch], selected_attributes: List[str], output_format: str, ma3_config: dict = None) -> str:
+    def _generate_export_data(self, fixtures: List[FixtureMatch], selected_attributes: List[str], output_format: str, ma3_config: dict = None, table_order: List[tuple] = None) -> str:
         """Generate export data in the specified format."""
         if output_format == "text":
             return self._export_text(fixtures, selected_attributes)
@@ -529,11 +535,11 @@ class MVRService:
                 raise ValueError("MA3 XML export requires configuration")
             return self._export_ma3_xml(fixtures, selected_attributes, ma3_config)
         elif output_format == "ma3_sequences":
-            return self._export_ma3_sequences_xml(fixtures, selected_attributes)
+            return self._export_ma3_sequences_xml(fixtures, selected_attributes, table_order)
         else:
             raise ValueError(f"Unsupported output format: {output_format}")
     
-    def _generate_export_data_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], output_format: str, ma3_config: dict = None) -> str:
+    def _generate_export_data_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], output_format: str, ma3_config: dict = None, table_order: List[tuple] = None) -> str:
         """Generate export data for per-fixture-type analysis."""
         if output_format == "text":
             return self._export_text_by_type(fixtures, fixture_type_attributes)
@@ -546,7 +552,7 @@ class MVRService:
                 raise ValueError("MA3 XML export requires configuration")
             return self._export_ma3_xml_by_type(fixtures, fixture_type_attributes, ma3_config)
         elif output_format == "ma3_sequences":
-            return self._export_ma3_sequences_xml_by_type(fixtures, fixture_type_attributes)
+            return self._export_ma3_sequences_xml_by_type(fixtures, fixture_type_attributes, table_order)
         else:
             raise ValueError(f"Unsupported output format: {output_format}")
     
@@ -1116,7 +1122,28 @@ class MVRService:
         Returns:
             Export data as string
         """
-        export_data = self._generate_export_data(results.fixtures, results.selected_attributes, output_format, ma3_config)
+        # Use table_order from results if available
+        table_order = getattr(results, 'table_order', None)
+        
+        # Check if this is a per-fixture-type analysis
+        if results.fixture_type_attributes:
+            # This is a per-fixture-type analysis
+            export_data = self._generate_export_data_by_type(
+                results.fixtures, 
+                results.fixture_type_attributes, 
+                output_format, 
+                ma3_config, 
+                table_order
+            )
+        else:
+            # This is a standard analysis
+            export_data = self._generate_export_data(
+                results.fixtures, 
+                results.selected_attributes, 
+                output_format, 
+                ma3_config, 
+                table_order
+            )
         
         if save_path:
             try:
@@ -1149,7 +1176,7 @@ class MVRService:
             "fixture_types": fixture_types
         } 
 
-    def _export_ma3_sequences_xml(self, fixtures: List[FixtureMatch], selected_attributes: List[str]) -> str:
+    def _export_ma3_sequences_xml(self, fixtures: List[FixtureMatch], selected_attributes: List[str], table_order: List[tuple] = None) -> str:
         """Export MA3 sequences XML format with one sequence per attribute per fixture, values set to 100."""
         import uuid
         from xml.etree.ElementTree import Element, SubElement, tostring
@@ -1158,123 +1185,138 @@ class MVRService:
         # Create root element
         root = Element("GMA3", DataVersion="2.2.5.2")
         
-        # Sort fixtures by fixture_id in ascending order
-        sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
-                                key=lambda x: x.fixture_id)
+        # Create a map of fixtures by ID for quick lookup
+        fixture_map = {fixture.fixture_id: fixture for fixture in fixtures if fixture.is_matched()}
         
-        # Create a sequence for each attribute of each fixture
-        for fixture in sorted_fixtures:
-            fixture_attributes = [attr for attr in selected_attributes 
-                                if attr in fixture.attribute_offsets]
-            
-            for attr_name in fixture_attributes:
-                sequence_num = fixture.get_sequence_for_attribute(attr_name)
-                if sequence_num:
-                    # Create sequence element
-                    sequence = SubElement(root, "Sequence")
-                    
-                    # Set sequence attributes
-                    sequence_name = f"{fixture.fixture_id}_{attr_name}"
-                    sequence.set("Name", sequence_name)
-                    sequence.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
-                    sequence.set("AutoStart", "Yes")
-                    sequence.set("AutoStop", "Yes")
-                    sequence.set("AutoFix", "No")
-                    sequence.set("AutoStomp", "No")
-                    sequence.set("SoftLTP", "Yes")
-                    sequence.set("XFadeReload", "No")
-                    sequence.set("SwapProtect", "No")
-                    sequence.set("KillProtect", "No")
-                    sequence.set("UseExecutorTime", "Yes")
-                    sequence.set("OffwhenOverridden", "Yes")
-                    sequence.set("SequMIB", "Enabled")
-                    sequence.set("AutoPrePos", "No")
-                    sequence.set("WrapAround", "Yes")
-                    sequence.set("MasterGoMode", "None")
-                    sequence.set("SpeedfromRate", "No")
-                    sequence.set("Tracking", "Yes")
-                    sequence.set("IncludeLinkLastGo", "Yes")
-                    sequence.set("RateScale", "One")
-                    sequence.set("SpeedScale", "One")
-                    sequence.set("PreferCueAppearance", "No")
-                    sequence.set("ExecutorDisplayMode", "Both")
-                    sequence.set("Action", "Pool Default")
-                    
-                    # Create OffCue
-                    off_cue = SubElement(sequence, "Cue")
-                    off_cue.set("Name", "OffCue")
-                    off_cue.set("Release", "Yes")
-                    off_cue.set("Assert", "Assert")
-                    off_cue.set("AllowDuplicates", "")
-                    off_cue.set("TrigType", "")
-                    
-                    off_part = SubElement(off_cue, "Part")
-                    off_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
-                    off_part.set("AlignRangeX", "No")
-                    off_part.set("AlignRangeY", "No")
-                    off_part.set("AlignRangeZ", "No")
-                    off_part.set("PreserveGridPositions", "No")
-                    off_part.set("MAgic", "No")
-                    off_part.set("Mode", "0")
-                    off_part.set("Action", "Pool Default")
-                    
-                    # Create CueZero
-                    cue_zero = SubElement(sequence, "Cue")
-                    cue_zero.set("Name", "CueZero")
-                    cue_zero.set("No", "  0")
-                    
-                    cue_zero_part = SubElement(cue_zero, "Part")
-                    cue_zero_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
-                    cue_zero_part.set("AlignRangeX", "No")
-                    cue_zero_part.set("AlignRangeY", "No")
-                    cue_zero_part.set("AlignRangeZ", "No")
-                    cue_zero_part.set("PreserveGridPositions", "No")
-                    cue_zero_part.set("MAgic", "No")
-                    cue_zero_part.set("Mode", "0")
-                    cue_zero_part.set("Action", "Pool Default")
-                    
-                    # Create Cue 1 with the actual data
-                    cue_one = SubElement(sequence, "Cue")
-                    cue_one.set("No", "  1")
-                    cue_one.set("AllowDuplicates", "")
-                    
-                    cue_one_part = SubElement(cue_one, "Part")
-                    cue_one_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
-                    cue_one_part.set("AlignRangeX", "No")
-                    cue_one_part.set("AlignRangeY", "No")
-                    cue_one_part.set("AlignRangeZ", "No")
-                    cue_one_part.set("PreserveGridPositions", "No")
-                    cue_one_part.set("MAgic", "No")
-                    cue_one_part.set("Mode", "0")
-                    cue_one_part.set("Action", "Pool Default")
-                    cue_one_part.set("Sync", "")
-                    cue_one_part.set("Morph", "")
-                    
-                    # Create PresetData
-                    preset_data = SubElement(cue_one_part, "PresetData")
-                    preset_data.set("Size", "1")
-                    
-                    # Create Phaser
-                    phaser = SubElement(preset_data, "Phaser")
-                    phaser.set("IDType", "0")
-                    phaser.set("ID", str(fixture.fixture_id))
-                    
-                    # Use activation group prefix if available for both Attribute and Function
-                    activation_group = fixture.get_activation_group_for_attribute(attr_name)
-                    if activation_group:
-                        attribute_name = f"{activation_group}_{attr_name}"
-                    else:
-                        attribute_name = attr_name
-                    
-                    phaser.set("Attribute", attribute_name)
-                    phaser.set("GridPos", "0")
-                    phaser.set("GridPosMatr", "0")
-                    phaser.set("Selective", "true")
-                    
-                    # Create Step with value 100
-                    step = SubElement(phaser, "Step")
-                    step.set("Function", attribute_name)
-                    step.set("Absolute", "100")
+        # Determine the order of sequences
+        if table_order:
+            # Use the provided table order to determine sequence order
+            ordered_sequences = []
+            for fixture_id, attr_name in table_order:
+                if fixture_id in fixture_map and attr_name in selected_attributes:
+                    fixture = fixture_map[fixture_id]
+                    if attr_name in fixture.attribute_offsets:
+                        ordered_sequences.append((fixture, attr_name))
+        else:
+            # Fallback to original behavior: sort fixtures by fixture_id in ascending order
+            sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
+                                    key=lambda x: x.fixture_id)
+            ordered_sequences = []
+            for fixture in sorted_fixtures:
+                fixture_attributes = [attr for attr in selected_attributes 
+                                    if attr in fixture.attribute_offsets]
+                for attr_name in fixture_attributes:
+                    ordered_sequences.append((fixture, attr_name))
+        
+        # Create a sequence for each attribute of each fixture in the determined order
+        for fixture, attr_name in ordered_sequences:
+            sequence_num = fixture.get_sequence_for_attribute(attr_name)
+            if sequence_num:
+                # Create sequence element
+                sequence = SubElement(root, "Sequence")
+                
+                # Set sequence attributes
+                sequence_name = f"{fixture.fixture_id}_{attr_name}"
+                sequence.set("Name", sequence_name)
+                sequence.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                sequence.set("AutoStart", "Yes")
+                sequence.set("AutoStop", "Yes")
+                sequence.set("AutoFix", "No")
+                sequence.set("AutoStomp", "No")
+                sequence.set("SoftLTP", "Yes")
+                sequence.set("XFadeReload", "No")
+                sequence.set("SwapProtect", "No")
+                sequence.set("KillProtect", "No")
+                sequence.set("UseExecutorTime", "Yes")
+                sequence.set("OffwhenOverridden", "Yes")
+                sequence.set("SequMIB", "Enabled")
+                sequence.set("AutoPrePos", "No")
+                sequence.set("WrapAround", "Yes")
+                sequence.set("MasterGoMode", "None")
+                sequence.set("SpeedfromRate", "No")
+                sequence.set("Tracking", "Yes")
+                sequence.set("IncludeLinkLastGo", "Yes")
+                sequence.set("RateScale", "One")
+                sequence.set("SpeedScale", "One")
+                sequence.set("PreferCueAppearance", "No")
+                sequence.set("ExecutorDisplayMode", "Both")
+                sequence.set("Action", "Pool Default")
+                
+                # Create OffCue
+                off_cue = SubElement(sequence, "Cue")
+                off_cue.set("Name", "OffCue")
+                off_cue.set("Release", "Yes")
+                off_cue.set("Assert", "Assert")
+                off_cue.set("AllowDuplicates", "")
+                off_cue.set("TrigType", "")
+                
+                off_part = SubElement(off_cue, "Part")
+                off_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                off_part.set("AlignRangeX", "No")
+                off_part.set("AlignRangeY", "No")
+                off_part.set("AlignRangeZ", "No")
+                off_part.set("PreserveGridPositions", "No")
+                off_part.set("MAgic", "No")
+                off_part.set("Mode", "0")
+                off_part.set("Action", "Pool Default")
+                
+                # Create CueZero
+                cue_zero = SubElement(sequence, "Cue")
+                cue_zero.set("Name", "CueZero")
+                cue_zero.set("No", "  0")
+                
+                cue_zero_part = SubElement(cue_zero, "Part")
+                cue_zero_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                cue_zero_part.set("AlignRangeX", "No")
+                cue_zero_part.set("AlignRangeY", "No")
+                cue_zero_part.set("AlignRangeZ", "No")
+                cue_zero_part.set("PreserveGridPositions", "No")
+                cue_zero_part.set("MAgic", "No")
+                cue_zero_part.set("Mode", "0")
+                cue_zero_part.set("Action", "Pool Default")
+                
+                # Create Cue 1 with the actual data
+                cue_one = SubElement(sequence, "Cue")
+                cue_one.set("No", "  1")
+                cue_one.set("AllowDuplicates", "")
+                
+                cue_one_part = SubElement(cue_one, "Part")
+                cue_one_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                cue_one_part.set("AlignRangeX", "No")
+                cue_one_part.set("AlignRangeY", "No")
+                cue_one_part.set("AlignRangeZ", "No")
+                cue_one_part.set("PreserveGridPositions", "No")
+                cue_one_part.set("MAgic", "No")
+                cue_one_part.set("Mode", "0")
+                cue_one_part.set("Action", "Pool Default")
+                cue_one_part.set("Sync", "")
+                cue_one_part.set("Morph", "")
+                
+                # Create PresetData
+                preset_data = SubElement(cue_one_part, "PresetData")
+                preset_data.set("Size", "1")
+                
+                # Create Phaser
+                phaser = SubElement(preset_data, "Phaser")
+                phaser.set("IDType", "0")
+                phaser.set("ID", str(fixture.fixture_id))
+                
+                # Use activation group prefix if available for both Attribute and Function
+                activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                if activation_group:
+                    attribute_name = f"{activation_group}_{attr_name}"
+                else:
+                    attribute_name = attr_name
+                
+                phaser.set("Attribute", attribute_name)
+                phaser.set("GridPos", "0")
+                phaser.set("GridPosMatr", "0")
+                phaser.set("Selective", "true")
+                
+                # Create Step with value 100
+                step = SubElement(phaser, "Step")
+                step.set("Function", attribute_name)
+                step.set("Absolute", "100")
         
         # Convert to pretty-printed XML string
         rough_string = tostring(root, encoding='unicode')
@@ -1292,7 +1334,7 @@ class MVRService:
         
         return '\n'.join(filtered_lines)
 
-    def _export_ma3_sequences_xml_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]]) -> str:
+    def _export_ma3_sequences_xml_by_type(self, fixtures: List[FixtureMatch], fixture_type_attributes: Dict[str, List[str]], table_order: List[tuple] = None) -> str:
         """Export MA3 sequences XML format with per-fixture-type attributes, values set to 100."""
         import uuid
         from xml.etree.ElementTree import Element, SubElement, tostring
@@ -1301,128 +1343,148 @@ class MVRService:
         # Create root element
         root = Element("GMA3", DataVersion="2.2.5.2")
         
-        # Sort fixtures by fixture_id in ascending order
-        sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
-                                key=lambda x: x.fixture_id)
+        # Create a map of fixtures by ID for quick lookup
+        fixture_map = {fixture.fixture_id: fixture for fixture in fixtures if fixture.is_matched()}
         
-        # Create a sequence for each attribute of each fixture
-        for fixture in sorted_fixtures:
-            fixture_type = fixture.gdtf_spec or "Unknown"
-            # Remove .gdtf extension for consistent naming
-            fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
-            selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
-            
-            fixture_attributes = [attr for attr in selected_attributes 
-                                if attr in fixture.attribute_offsets]
-            
-            for attr_name in fixture_attributes:
-                sequence_num = fixture.get_sequence_for_attribute(attr_name)
-                if sequence_num:
-                    # Create sequence element
-                    sequence = SubElement(root, "Sequence")
+        # Determine the order of sequences
+        if table_order:
+            # Use the provided table order to determine sequence order
+            ordered_sequences = []
+            for fixture_id, attr_name in table_order:
+                if fixture_id in fixture_map:
+                    fixture = fixture_map[fixture_id]
+                    fixture_type = fixture.gdtf_spec or "Unknown"
+                    fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+                    selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
                     
-                    # Set sequence attributes
-                    sequence_name = f"{fixture.fixture_id}_{attr_name}"
-                    sequence.set("Name", sequence_name)
-                    sequence.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
-                    sequence.set("AutoStart", "Yes")
-                    sequence.set("AutoStop", "Yes")
-                    sequence.set("AutoFix", "No")
-                    sequence.set("AutoStomp", "No")
-                    sequence.set("SoftLTP", "Yes")
-                    sequence.set("XFadeReload", "No")
-                    sequence.set("SwapProtect", "No")
-                    sequence.set("KillProtect", "No")
-                    sequence.set("UseExecutorTime", "Yes")
-                    sequence.set("OffwhenOverridden", "Yes")
-                    sequence.set("SequMIB", "Enabled")
-                    sequence.set("AutoPrePos", "No")
-                    sequence.set("WrapAround", "Yes")
-                    sequence.set("MasterGoMode", "None")
-                    sequence.set("SpeedfromRate", "No")
-                    sequence.set("Tracking", "Yes")
-                    sequence.set("IncludeLinkLastGo", "Yes")
-                    sequence.set("RateScale", "One")
-                    sequence.set("SpeedScale", "One")
-                    sequence.set("PreferCueAppearance", "No")
-                    sequence.set("ExecutorDisplayMode", "Both")
-                    sequence.set("Action", "Pool Default")
-                    
-                    # Create OffCue
-                    off_cue = SubElement(sequence, "Cue")
-                    off_cue.set("Name", "OffCue")
-                    off_cue.set("Release", "Yes")
-                    off_cue.set("Assert", "Assert")
-                    off_cue.set("AllowDuplicates", "")
-                    off_cue.set("TrigType", "")
-                    
-                    off_part = SubElement(off_cue, "Part")
-                    off_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
-                    off_part.set("AlignRangeX", "No")
-                    off_part.set("AlignRangeY", "No")
-                    off_part.set("AlignRangeZ", "No")
-                    off_part.set("PreserveGridPositions", "No")
-                    off_part.set("MAgic", "No")
-                    off_part.set("Mode", "0")
-                    off_part.set("Action", "Pool Default")
-                    
-                    # Create CueZero
-                    cue_zero = SubElement(sequence, "Cue")
-                    cue_zero.set("Name", "CueZero")
-                    cue_zero.set("No", "  0")
-                    
-                    cue_zero_part = SubElement(cue_zero, "Part")
-                    cue_zero_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
-                    cue_zero_part.set("AlignRangeX", "No")
-                    cue_zero_part.set("AlignRangeY", "No")
-                    cue_zero_part.set("AlignRangeZ", "No")
-                    cue_zero_part.set("PreserveGridPositions", "No")
-                    cue_zero_part.set("MAgic", "No")
-                    cue_zero_part.set("Mode", "0")
-                    cue_zero_part.set("Action", "Pool Default")
-                    
-                    # Create Cue 1 with the actual data
-                    cue_one = SubElement(sequence, "Cue")
-                    cue_one.set("No", "  1")
-                    cue_one.set("AllowDuplicates", "")
-                    
-                    cue_one_part = SubElement(cue_one, "Part")
-                    cue_one_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
-                    cue_one_part.set("AlignRangeX", "No")
-                    cue_one_part.set("AlignRangeY", "No")
-                    cue_one_part.set("AlignRangeZ", "No")
-                    cue_one_part.set("PreserveGridPositions", "No")
-                    cue_one_part.set("MAgic", "No")
-                    cue_one_part.set("Mode", "0")
-                    cue_one_part.set("Action", "Pool Default")
-                    cue_one_part.set("Sync", "")
-                    cue_one_part.set("Morph", "")
-                    
-                    # Create PresetData
-                    preset_data = SubElement(cue_one_part, "PresetData")
-                    preset_data.set("Size", "1")
-                    
-                    # Create Phaser
-                    phaser = SubElement(preset_data, "Phaser")
-                    phaser.set("IDType", "0")
-                    phaser.set("ID", str(fixture.fixture_id))
-                    
-                    # Use activation group prefix if available for both Attribute and Function
-                    activation_group = fixture.get_activation_group_for_attribute(attr_name)
-                    if activation_group:
-                        attribute_name = f"{activation_group}_{attr_name}"
-                    else:
-                        attribute_name = attr_name
-                    
-                    phaser.set("Attribute", attribute_name)
-                    phaser.set("GridPos", "0")
-                    phaser.set("GridPosMatr", "0")
-                    phaser.set("Selective", "true")
-                    
-                    # Create Step with value 100
-                    step = SubElement(phaser, "Step")
-                    step.set("Function", attribute_name)
-                    step.set("Absolute", "100")
+                    if attr_name in selected_attributes and attr_name in fixture.attribute_offsets:
+                        ordered_sequences.append((fixture, attr_name))
+        else:
+            # Fallback to original behavior: sort fixtures by fixture_id in ascending order
+            sorted_fixtures = sorted([f for f in fixtures if f.is_matched()], 
+                                    key=lambda x: x.fixture_id)
+            ordered_sequences = []
+            for fixture in sorted_fixtures:
+                fixture_type = fixture.gdtf_spec or "Unknown"
+                # Remove .gdtf extension for consistent naming
+                fixture_type_clean = fixture_type.replace('.gdtf', '') if fixture_type.endswith('.gdtf') else fixture_type
+                selected_attributes = fixture_type_attributes.get(fixture_type_clean, [])
+                
+                fixture_attributes = [attr for attr in selected_attributes 
+                                    if attr in fixture.attribute_offsets]
+                
+                for attr_name in fixture_attributes:
+                    ordered_sequences.append((fixture, attr_name))
+        
+        # Create a sequence for each attribute of each fixture in the determined order
+        for fixture, attr_name in ordered_sequences:
+            sequence_num = fixture.get_sequence_for_attribute(attr_name)
+            if sequence_num:
+                # Create sequence element
+                sequence = SubElement(root, "Sequence")
+                
+                # Set sequence attributes
+                sequence_name = f"{fixture.fixture_id}_{attr_name}"
+                sequence.set("Name", sequence_name)
+                sequence.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                sequence.set("AutoStart", "Yes")
+                sequence.set("AutoStop", "Yes")
+                sequence.set("AutoFix", "No")
+                sequence.set("AutoStomp", "No")
+                sequence.set("SoftLTP", "Yes")
+                sequence.set("XFadeReload", "No")
+                sequence.set("SwapProtect", "No")
+                sequence.set("KillProtect", "No")
+                sequence.set("UseExecutorTime", "Yes")
+                sequence.set("OffwhenOverridden", "Yes")
+                sequence.set("SequMIB", "Enabled")
+                sequence.set("AutoPrePos", "No")
+                sequence.set("WrapAround", "Yes")
+                sequence.set("MasterGoMode", "None")
+                sequence.set("SpeedfromRate", "No")
+                sequence.set("Tracking", "Yes")
+                sequence.set("IncludeLinkLastGo", "Yes")
+                sequence.set("RateScale", "One")
+                sequence.set("SpeedScale", "One")
+                sequence.set("PreferCueAppearance", "No")
+                sequence.set("ExecutorDisplayMode", "Both")
+                sequence.set("Action", "Pool Default")
+                
+                # Create OffCue
+                off_cue = SubElement(sequence, "Cue")
+                off_cue.set("Name", "OffCue")
+                off_cue.set("Release", "Yes")
+                off_cue.set("Assert", "Assert")
+                off_cue.set("AllowDuplicates", "")
+                off_cue.set("TrigType", "")
+                
+                off_part = SubElement(off_cue, "Part")
+                off_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                off_part.set("AlignRangeX", "No")
+                off_part.set("AlignRangeY", "No")
+                off_part.set("AlignRangeZ", "No")
+                off_part.set("PreserveGridPositions", "No")
+                off_part.set("MAgic", "No")
+                off_part.set("Mode", "0")
+                off_part.set("Action", "Pool Default")
+                
+                # Create CueZero
+                cue_zero = SubElement(sequence, "Cue")
+                cue_zero.set("Name", "CueZero")
+                cue_zero.set("No", "  0")
+                
+                cue_zero_part = SubElement(cue_zero, "Part")
+                cue_zero_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                cue_zero_part.set("AlignRangeX", "No")
+                cue_zero_part.set("AlignRangeY", "No")
+                cue_zero_part.set("AlignRangeZ", "No")
+                cue_zero_part.set("PreserveGridPositions", "No")
+                cue_zero_part.set("MAgic", "No")
+                cue_zero_part.set("Mode", "0")
+                cue_zero_part.set("Action", "Pool Default")
+                
+                # Create Cue 1 with the actual data
+                cue_one = SubElement(sequence, "Cue")
+                cue_one.set("No", "  1")
+                cue_one.set("AllowDuplicates", "")
+                
+                cue_one_part = SubElement(cue_one, "Part")
+                cue_one_part.set("Guid", str(uuid.uuid4()).replace('-', ' ').upper())
+                cue_one_part.set("AlignRangeX", "No")
+                cue_one_part.set("AlignRangeY", "No")
+                cue_one_part.set("AlignRangeZ", "No")
+                cue_one_part.set("PreserveGridPositions", "No")
+                cue_one_part.set("MAgic", "No")
+                cue_one_part.set("Mode", "0")
+                cue_one_part.set("Action", "Pool Default")
+                cue_one_part.set("Sync", "")
+                cue_one_part.set("Morph", "")
+                
+                # Create PresetData
+                preset_data = SubElement(cue_one_part, "PresetData")
+                preset_data.set("Size", "1")
+                
+                # Create Phaser
+                phaser = SubElement(preset_data, "Phaser")
+                phaser.set("IDType", "0")
+                phaser.set("ID", str(fixture.fixture_id))
+                
+                # Use activation group prefix if available for both Attribute and Function
+                activation_group = fixture.get_activation_group_for_attribute(attr_name)
+                if activation_group:
+                    attribute_name = f"{activation_group}_{attr_name}"
+                else:
+                    attribute_name = attr_name
+                
+                phaser.set("Attribute", attribute_name)
+                phaser.set("GridPos", "0")
+                phaser.set("GridPosMatr", "0")
+                phaser.set("Selective", "true")
+                
+                # Create Step with value 100
+                step = SubElement(phaser, "Step")
+                step.set("Function", attribute_name)
+                step.set("Absolute", "100")
         
         # Convert to pretty-printed XML string
         rough_string = tostring(root, encoding='unicode')

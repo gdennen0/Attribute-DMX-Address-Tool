@@ -180,7 +180,7 @@ class Config:
 
     def get_sequence_start_number(self) -> int:
         """Get the starting number for sequence numbering."""
-        return self.config.get("sequence_start_number", 1)
+        return self.config.get("sequence_start_number", 1001)
     
     def set_sequence_start_number(self, start_number: int):
         """Set the starting number for sequence numbering and save config."""
