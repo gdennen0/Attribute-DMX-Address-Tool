@@ -35,4 +35,10 @@ output/
 # Temporary files
 *.tmp
 *.temp
-temp/ 
+temp/
+
+# Logs
+*.log
+
+# Local configuration overrides
+local_config.json 

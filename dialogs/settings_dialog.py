@@ -48,27 +48,10 @@ class SettingsDialog(QDialog):
         export_group = QGroupBox("Export Settings")
         export_layout = QGridLayout(export_group)
         
-        export_layout.addWidget(QLabel("Default Export Format:"), 0, 0)
-        self.export_format_combo = QComboBox()
-        self.export_format_combo.addItems(['text', 'csv', 'json', 'ma3_xml'])
-        export_layout.addWidget(self.export_format_combo, 0, 1)
-        
-        export_layout.addWidget(QLabel("Sequence Start Number:"), 1, 0)
+        export_layout.addWidget(QLabel("Sequence Start Number:"), 0, 0)
         self.sequence_start_spin = QSpinBox()
         self.sequence_start_spin.setRange(1, 9999)
-        export_layout.addWidget(self.sequence_start_spin, 1, 1)
-        
-        export_layout.addWidget(QLabel("Auto-save Results:"), 2, 0)
-        self.auto_save_check = QCheckBox()
-        export_layout.addWidget(self.auto_save_check, 2, 1)
-        
-        export_layout.addWidget(QLabel("Output Directory:"), 3, 0)
-        self.output_dir_edit = QLineEdit()
-        self.output_browse_button = QPushButton("Browse...")
-        self.output_browse_button.clicked.connect(self._browse_output_dir)
-        
-        export_layout.addWidget(self.output_dir_edit, 3, 1)
-        export_layout.addWidget(self.output_browse_button, 3, 2)
+        export_layout.addWidget(self.sequence_start_spin, 0, 1)
         
         layout.addWidget(export_group)
         
@@ -122,10 +105,7 @@ class SettingsDialog(QDialog):
         self.gdtf_folder_edit.setText(self.config.get_external_gdtf_folder())
         
         # Export settings
-        self.export_format_combo.setCurrentText(self.config.get_output_format())
         self.sequence_start_spin.setValue(self.config.get_sequence_start_number())
-        self.auto_save_check.setChecked(self.config.get_save_results())
-        self.output_dir_edit.setText(self.config.get_output_directory())
         
         # MA3 settings
         ma3_config = self.config.get_ma3_xml_config()
@@ -145,27 +125,13 @@ class SettingsDialog(QDialog):
         if folder:
             self.gdtf_folder_edit.setText(folder)
     
-    def _browse_output_dir(self):
-        """Browse for output directory."""
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "Select Output Directory",
-            self.output_dir_edit.text()
-        )
-        
-        if folder:
-            self.output_dir_edit.setText(folder)
-    
     def _save_and_close(self):
         """Save settings and close dialog."""
         # Save GDTF settings
         self.config.set_external_gdtf_folder(self.gdtf_folder_edit.text())
         
         # Save export settings
-        self.config.set_output_format(self.export_format_combo.currentText())
         self.config.set_sequence_start_number(self.sequence_start_spin.value())
-        self.config.set_save_results(self.auto_save_check.isChecked())
-        self.config.set_output_directory(self.output_dir_edit.text())
         
         # Save MA3 settings
         ma3_config = {
@@ -185,10 +151,7 @@ class SettingsDialog(QDialog):
         """Reset all settings to defaults."""
         # Reset UI to defaults
         self.gdtf_folder_edit.setText("")
-        self.export_format_combo.setCurrentText("text")
         self.sequence_start_spin.setValue(1001)
-        self.auto_save_check.setChecked(True)
-        self.output_dir_edit.setText("output")
         self.trigger_on_spin.setValue(255)
         self.trigger_off_spin.setValue(0)
         self.out_from_spin.setValue(0)

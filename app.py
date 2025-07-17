@@ -9,13 +9,12 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QTextEdit, QTableWidget, QTableWidgetItem,
-    QHeaderView, QCheckBox, QGroupBox, QMenuBar, QMenu, QComboBox,
-    QFileDialog, QMessageBox, QSplitter, QScrollArea, QSizePolicy,
+    QPushButton, QLabel, QGroupBox, QMenuBar, QMenu,
+    QFileDialog, QMessageBox, QSplitter, QSizePolicy,
     QInputDialog, QDialog
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QFont
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction
 
 from config import Config
 import core
@@ -75,9 +74,7 @@ class MainWindow(QMainWindow):
         left_panel = self._setup_fixtures_panel()
         content_splitter.addWidget(left_panel)
         
-        # Right panel - (removed export panel)
-        # right_panel = self._setup_export_panel()
-        # content_splitter.addWidget(right_panel)
+        # Right panel - (removed export panel - functionality moved to individual export buttons)
         content_splitter.setSizes([600, 400])
         main_layout.addWidget(content_splitter, stretch=1)
         
@@ -106,6 +103,10 @@ class MainWindow(QMainWindow):
         load_project_action.setShortcut("Ctrl+O")
         load_project_action.triggered.connect(self._load_project)
         file_menu.addAction(load_project_action)
+        
+        # Recent projects submenu
+        self.recent_projects_menu = file_menu.addMenu("Recent Projects")
+        self.recent_projects_menu.aboutToShow.connect(self._update_recent_projects_menu)
         
         file_menu.addSeparator()
         
@@ -197,10 +198,15 @@ class MainWindow(QMainWindow):
         self.export_ma3_sequences_button = QPushButton("Export MA3 Sequences")
         self.export_ma3_sequences_button.clicked.connect(self._export_ma3_sequences)
         
+        # Export CSV button
+        self.export_master_csv_button = QPushButton("Export CSV")
+        self.export_master_csv_button.clicked.connect(self._export_master_csv)
+        
         master_actions_layout.addStretch()
         master_actions_layout.addWidget(self.apply_sequences_button)
         master_actions_layout.addWidget(self.renumber_sequences_button)
         master_actions_layout.addWidget(self.export_ma3_sequences_button)
+        master_actions_layout.addWidget(self.export_master_csv_button)
         layout.addWidget(master_actions_widget)
         
         return panel
@@ -228,7 +234,14 @@ class MainWindow(QMainWindow):
         # Export MA3 Remotes button
         self.export_ma3_remotes_button = QPushButton("Export MA3 Remotes")
         self.export_ma3_remotes_button.clicked.connect(self._export_ma3_remotes)
+        
+        # Export CSV button
+        self.export_remote_csv_button = QPushButton("Export CSV")
+        self.export_remote_csv_button.clicked.connect(self._export_remote_csv)
+        
+        remote_actions_layout.addStretch()
         remote_actions_layout.addWidget(self.export_ma3_remotes_button)
+        remote_actions_layout.addWidget(self.export_remote_csv_button)
         
         layout.addWidget(remote_actions_widget)
         
@@ -281,7 +294,8 @@ class MainWindow(QMainWindow):
         # Assign sequences only to master fixtures (not remote fixtures on import)
         matched_master_fixtures = self.get_master_fixtures_matched()
         if matched_master_fixtures:
-            core.assign_sequences(matched_master_fixtures, 1001)
+            sequence_start = self.config.get_sequence_start_number()
+            core.assign_sequences(matched_master_fixtures, sequence_start)
         
         self._update_fixtures_tables()
         self._update_status_info()
@@ -669,6 +683,100 @@ class MainWindow(QMainWindow):
                 f"Failed to export MA3 Sequences:\n{str(e)}"
             )
     
+    def _export_master_csv(self):
+        """Export master fixtures as CSV."""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        # Get master fixtures only using centralized access method
+        master_fixtures = self.get_master_fixtures()
+        
+        if not master_fixtures:
+            QMessageBox.warning(self, "No Master Fixtures", "No master fixtures found to export.")
+            return
+        
+        # Get save file path from user
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Master Fixtures CSV",
+            str(Path.home() / "master_fixtures.csv"),
+            "CSV Files (*.csv)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            # Export using the core exporter
+            from core.exporter import export_to_csv
+            
+            # Generate the CSV content
+            csv_content = export_to_csv(master_fixtures)
+            
+            # Save to file
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(csv_content)
+            
+            QMessageBox.information(
+                self,
+                "Export Successful",
+                f"Master fixtures exported successfully to:\n{file_path}"
+            )
+            self.status_label.setText(f"Exported Master CSV to {Path(file_path).name}")
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Error",
+                f"Failed to export Master CSV:\n{str(e)}"
+            )
+    
+    def _export_remote_csv(self):
+        """Export remote fixtures as CSV."""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        # Get remote fixtures only using centralized access method
+        remote_fixtures = self.get_remote_fixtures()
+        
+        if not remote_fixtures:
+            QMessageBox.warning(self, "No Remote Fixtures", "No remote fixtures found to export.")
+            return
+        
+        # Get save file path from user
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Remote Fixtures CSV",
+            str(Path.home() / "remote_fixtures.csv"),
+            "CSV Files (*.csv)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            # Export using the core exporter
+            from core.exporter import export_to_csv
+            
+            # Generate the CSV content
+            csv_content = export_to_csv(remote_fixtures)
+            
+            # Save to file
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(csv_content)
+            
+            QMessageBox.information(
+                self,
+                "Export Successful",
+                f"Remote fixtures exported successfully to:\n{file_path}"
+            )
+            self.status_label.setText(f"Exported Remote CSV to {Path(file_path).name}")
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Error",
+                f"Failed to export Remote CSV:\n{str(e)}"
+            )
+    
     def _update_ui_state(self):
         """Update UI state based on current data."""
         has_fixtures = len(self.project_state['fixtures']) > 0
@@ -684,6 +792,8 @@ class MainWindow(QMainWindow):
         self.renumber_sequences_button.setEnabled(len(master_fixtures) > 0)
         self.export_ma3_remotes_button.setEnabled(len(remote_fixtures) > 0)
         self.export_ma3_sequences_button.setEnabled(len(master_fixtures) > 0)
+        self.export_master_csv_button.setEnabled(len(master_fixtures) > 0)
+        self.export_remote_csv_button.setEnabled(len(remote_fixtures) > 0)
     
     def _show_about(self):
         """Show about dialog."""
@@ -695,6 +805,122 @@ class MainWindow(QMainWindow):
             "lighting fixture addresses and generate DMX documentation.\n\n"
             "Completely rewritten for simplicity and maintainability."
         )
+    
+    def _update_recent_projects_menu(self):
+        """Update the recent projects menu with current projects."""
+        self.recent_projects_menu.clear()
+        
+        recent_projects = self.config.get_recent_projects()
+        
+        if not recent_projects:
+            no_projects_action = QAction("No recent projects", self)
+            no_projects_action.setEnabled(False)
+            self.recent_projects_menu.addAction(no_projects_action)
+            return
+        
+        for i, project_path in enumerate(recent_projects):
+            # Check if project file still exists
+            if not Path(project_path).exists():
+                continue
+            
+            # Create action with project name
+            project_name = Path(project_path).stem
+            action = QAction(f"{i+1}. {project_name}", self)
+            action.setData(project_path)
+            action.triggered.connect(lambda checked, path=project_path: self._load_recent_project(path))
+            self.recent_projects_menu.addAction(action)
+        
+        # Add separator and clear action if we have projects
+        if self.recent_projects_menu.actions():
+            self.recent_projects_menu.addSeparator()
+            clear_action = QAction("Clear Recent Projects", self)
+            clear_action.triggered.connect(self._clear_recent_projects)
+            self.recent_projects_menu.addAction(clear_action)
+    
+    def _load_recent_project(self, project_path: str):
+        """Load a project from the recent projects list."""
+        project_file = Path(project_path)
+        
+        if not project_file.exists():
+            QMessageBox.warning(
+                self,
+                "Project Not Found",
+                f"The project file could not be found:\n{project_path}\n\n"
+                "It may have been moved or deleted."
+            )
+            # Remove from recent projects
+            self.config.remove_recent_project(project_path)
+            return
+        
+        # Check if this is a valid project
+        project_info = project_manager.get_project_info(project_file)
+        if not project_info:
+            QMessageBox.warning(
+                self,
+                "Invalid Project",
+                "The selected file is not a valid AttributeAddresser project.\n\n"
+                "Please select a .aa file created by this application."
+            )
+            # Remove from recent projects
+            self.config.remove_recent_project(project_path)
+            return
+        
+        # Confirm loading (in case user has unsaved changes)
+        reply = QMessageBox.question(
+            self,
+            "Load Project",
+            f"Load project '{project_info['name']}'?\n"
+            f"This will replace the current project data.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        # Load the project
+        app_state, config_data = project_manager.load_project(project_file)
+        
+        if app_state is not None:
+            # Restore application state
+            self.project_state = app_state
+            
+            # Store the current project path
+            self.current_project_path = project_file
+            
+            # Restore configuration if needed
+            if config_data:
+                self._restore_config(config_data)
+            
+            # Update UI
+            self._update_fixtures_tables()
+            self._update_status_info()
+            self._update_ui_state()
+            
+            QMessageBox.information(
+                self,
+                "Project Loaded",
+                f"Project '{project_info['name']}' loaded successfully.\n"
+                f"Fixtures: {project_info['fixture_count']}"
+            )
+            self.status_label.setText(f"Project loaded: {project_info['name']}")
+        else:
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                "Failed to load project. Please check the console for details."
+            )
+    
+    def _clear_recent_projects(self):
+        """Clear all recent projects."""
+        reply = QMessageBox.question(
+            self,
+            "Clear Recent Projects",
+            "Are you sure you want to clear all recent projects?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.config.clear_recent_projects()
 
     def _save_project(self):
         """Save the current project."""
@@ -702,6 +928,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'current_project_path') and self.current_project_path:
             success = project_manager.save_project(self.current_project_path, self.project_state, self.config)
             if success:
+                # Add to recent projects
+                self.config.add_recent_project(str(self.current_project_path))
+                # Update last project directory
+                self.config.set_last_project_directory(str(self.current_project_path.parent))
                 self.status_label.setText(f"Project saved to {self.current_project_path.name}")
             else:
                 QMessageBox.critical(self, "Save Error", "Failed to save project. Please check the console for details.")
@@ -729,11 +959,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid Name", "Please enter a valid project name.")
             return
         
-        # Get save file path from user
+        # Get save file path from user - use last project directory if available
+        last_dir = self.config.get_last_project_directory()
+        if last_dir and Path(last_dir).exists():
+            default_path = Path(last_dir) / f"{project_name}.aa"
+        else:
+            default_path = Path.home() / f"{project_name}.aa"
+        
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Project As",
-            str(Path.home() / f"{project_name}.aa"),
+            str(default_path),
             "AttributeAddresser Projects (*.aa)"
         )
         
@@ -759,6 +995,10 @@ class MainWindow(QMainWindow):
         if success:
             # Store the current project path
             self.current_project_path = project_path
+            # Add to recent projects
+            self.config.add_recent_project(str(project_path))
+            # Update last project directory
+            self.config.set_last_project_directory(str(project_path.parent))
             QMessageBox.information(
                 self,
                 "Project Saved",
@@ -776,11 +1016,17 @@ class MainWindow(QMainWindow):
         """Load a project."""
         from PyQt6.QtWidgets import QFileDialog
         
-        # Get load file path from user - look for .aa files
+        # Get load file path from user - use last project directory if available
+        last_dir = self.config.get_last_project_directory()
+        if last_dir and Path(last_dir).exists():
+            default_dir = last_dir
+        else:
+            default_dir = str(Path.home())
+        
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Load Project",
-            str(Path.home()),
+            default_dir,
             "AttributeAddresser Projects (*.aa)"
         )
         
@@ -822,6 +1068,11 @@ class MainWindow(QMainWindow):
             # Store the current project path
             self.current_project_path = project_path
             
+            # Add to recent projects
+            self.config.add_recent_project(str(project_path))
+            # Update last project directory
+            self.config.set_last_project_directory(str(project_path.parent))
+            
             # Restore configuration if needed
             if config_data:
                 self._restore_config(config_data)
@@ -847,10 +1098,11 @@ class MainWindow(QMainWindow):
     
     def _restore_config(self, config_data: Dict[str, Any]):
         """Restore configuration from saved data."""
-        # This would restore configuration settings
-        # For now, just print what we have
-        print(f"Config data to restore: {config_data}")
-        # TODO: Implement config restoration based on your config structure
+        # Configuration is handled separately from project data
+        # Project data contains fixtures and GDTF profiles
+        # Config contains user preferences and settings
+        if config_data:
+            print(f"Config data available: {list(config_data.keys())}")
     
     # Centralized data access methods for single source of truth
     def get_master_fixtures(self) -> List[Dict[str, Any]]:

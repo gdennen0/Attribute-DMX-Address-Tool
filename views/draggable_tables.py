@@ -69,13 +69,18 @@ class DragDropTableModel(QAbstractTableModel):
         if not index.isValid():
             return Qt.ItemFlag.ItemIsDropEnabled
         
-        flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
+        # Use int values to avoid recursion issues with Qt flags
+        base_flags = (Qt.ItemFlag.ItemIsEnabled.value | 
+                     Qt.ItemFlag.ItemIsSelectable.value | 
+                     Qt.ItemFlag.ItemIsDragEnabled.value | 
+                     Qt.ItemFlag.ItemIsDropEnabled.value)
         
         # Make routing column (column 8) read-only but still draggable
         if index.column() == 8:  # Routing column
-            return flags & ~Qt.ItemFlag.ItemIsEditable
+            return Qt.ItemFlag(base_flags)
         
-        return flags | Qt.ItemFlag.ItemIsEditable
+        # Add editable flag for other columns
+        return Qt.ItemFlag(base_flags | Qt.ItemFlag.ItemIsEditable.value)
     
     def supportedDropActions(self):
         """Return supported drop actions."""

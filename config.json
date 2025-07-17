@@ -41,7 +41,12 @@
   "renumber_sequences_config": {
     "start_number": 1001,
     "interval": 1,
-    "add_breaks": true,
+    "add_breaks": false,
     "break_sequences": 1
-  }
+  },
+  "sequence_start_number": 1001,
+  "recent_projects": [
+    "/Users/gdennen/MyProject.aa"
+  ],
+  "last_project_directory": "/Users/gdennen"
 }

@@ -27,15 +27,14 @@ class Config:
         
         # Default configuration
         return {
-            "selected_attributes": [],  # Legacy - kept for backward compatibility
-            "fixture_type_attributes": {},  # New: per-fixture-type attributes
-            "output_format": "text",
-            "save_results": True,
-            "output_directory": "output",
+            "selected_attributes": [],  # Global selected attributes (used for backward compatibility)
+            "fixture_type_attributes": {}, 
             "last_mvr_directory": "",
             "last_export_directory": "",
             "last_gdtf_directory": "",
-            "last_csv_directory": "",  # New: last used CSV directory
+            "last_csv_directory": "",  
+            "last_project_directory": "", 
+            "recent_projects": [],  
             "external_gdtf_folder": "",
             "ma3_xml_config": {
                 "trigger_on": 255,
@@ -81,33 +80,6 @@ class Config:
         self.config["fixture_type_attributes"] = fixture_type_attributes
         self.save_config()
     
-    def get_output_format(self) -> str:
-        """Get output format."""
-        return self.config.get("output_format", "text")
-    
-    def set_output_format(self, format_type: str):
-        """Set output format and save config."""
-        self.config["output_format"] = format_type
-        self.save_config()
-    
-    def get_save_results(self) -> bool:
-        """Get save results setting."""
-        return self.config.get("save_results", True)
-    
-    def set_save_results(self, save: bool):
-        """Set save results setting and save config."""
-        self.config["save_results"] = save
-        self.save_config()
-    
-    def get_output_directory(self) -> str:
-        """Get output directory."""
-        return self.config.get("output_directory", "output")
-    
-    def set_output_directory(self, directory: str):
-        """Set output directory and save config."""
-        self.config["output_directory"] = directory
-        self.save_config()
-    
     def get_last_mvr_directory(self) -> str:
         """Get last used MVR directory."""
         return self.config.get("last_mvr_directory", "")
@@ -142,6 +114,49 @@ class Config:
     def set_last_csv_directory(self, directory: str):
         """Set last used CSV directory and save config."""
         self.config["last_csv_directory"] = directory
+        self.save_config()
+    
+    def get_last_project_directory(self) -> str:
+        """Get last used project directory."""
+        return self.config.get("last_project_directory", "")
+    
+    def set_last_project_directory(self, directory: str):
+        """Set last used project directory and save config."""
+        self.config["last_project_directory"] = directory
+        self.save_config()
+    
+    def get_recent_projects(self) -> List[str]:
+        """Get list of recent project paths."""
+        return self.config.get("recent_projects", [])
+    
+    def add_recent_project(self, project_path: str):
+        """Add a project to recent projects list and save config."""
+        recent_projects = self.get_recent_projects()
+        
+        # Remove if already exists (to move to top)
+        if project_path in recent_projects:
+            recent_projects.remove(project_path)
+        
+        # Add to beginning of list
+        recent_projects.insert(0, project_path)
+        
+        # Keep only last 10 projects
+        recent_projects = recent_projects[:10]
+        
+        self.config["recent_projects"] = recent_projects
+        self.save_config()
+    
+    def remove_recent_project(self, project_path: str):
+        """Remove a project from recent projects list and save config."""
+        recent_projects = self.get_recent_projects()
+        if project_path in recent_projects:
+            recent_projects.remove(project_path)
+            self.config["recent_projects"] = recent_projects
+            self.save_config()
+    
+    def clear_recent_projects(self):
+        """Clear all recent projects and save config."""
+        self.config["recent_projects"] = []
         self.save_config()
     
     def get_external_gdtf_folder(self) -> str:

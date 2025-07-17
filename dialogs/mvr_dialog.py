@@ -70,18 +70,21 @@ class MVRImportDialog(QDialog):
         selection_layout = QHBoxLayout()
         self.select_all_button = QPushButton("Select All")
         self.select_none_button = QPushButton("Select None")
+        self.toggle_selected_button = QPushButton("Toggle Selected")
         self.gdtf_matching_button = QPushButton("GDTF Profile Matching...")
         self.set_as_master_button = QPushButton("Set Selected as Master")
         self.set_as_remote_button = QPushButton("Set Selected as Remote")
         
         self.select_all_button.clicked.connect(self._select_all)
         self.select_none_button.clicked.connect(self._select_none)
+        self.toggle_selected_button.clicked.connect(self._toggle_selected)
         self.gdtf_matching_button.clicked.connect(self._open_gdtf_matching)
         self.set_as_master_button.clicked.connect(self._set_selected_as_master)
         self.set_as_remote_button.clicked.connect(self._set_selected_as_remote)
         
         selection_layout.addWidget(self.select_all_button)
         selection_layout.addWidget(self.select_none_button)
+        selection_layout.addWidget(self.toggle_selected_button)
         selection_layout.addWidget(self.gdtf_matching_button)
         selection_layout.addStretch()
         selection_layout.addWidget(self.set_as_master_button)
@@ -107,6 +110,10 @@ class MVRImportDialog(QDialog):
         headers = ["Select", "Name", "Type", "Mode", "Address", "ID", "Role", "Status"]
         self.fixtures_table.setColumnCount(len(headers))
         self.fixtures_table.setHorizontalHeaderLabels(headers)
+        
+        # Enable row selection
+        self.fixtures_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.fixtures_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         
         # Resize columns
         header = self.fixtures_table.horizontalHeader()
@@ -217,11 +224,13 @@ class MVRImportDialog(QDialog):
             role_display = "NONE" if role == "none" else role.title()
             role_item = QTableWidgetItem(role_display)
             if role == 'none':
-                role_item.setBackground(Qt.GlobalColor.yellow)
+                role_item.setBackground(Qt.GlobalColor.lightGray)
             elif role == 'master':
-                role_item.setBackground(Qt.GlobalColor.green)
+                role_item.setBackground(Qt.GlobalColor.darkGreen)
+                role_item.setForeground(Qt.GlobalColor.white)
             elif role == 'remote':
-                role_item.setBackground(Qt.GlobalColor.cyan)
+                role_item.setBackground(Qt.GlobalColor.darkBlue)
+                role_item.setForeground(Qt.GlobalColor.white)
             self.fixtures_table.setItem(row, 6, role_item)
             
             # Status
@@ -255,6 +264,42 @@ class MVRImportDialog(QDialog):
             checkbox = self.fixtures_table.cellWidget(row, 0)
             if checkbox:
                 checkbox.setChecked(False)
+    
+    def _toggle_selected(self):
+        """Toggle checkbox state of highlighted/selected rows."""
+        selected_rows = set()
+        for item in self.fixtures_table.selectedItems():
+            selected_rows.add(item.row())
+        
+        if not selected_rows:
+            QMessageBox.information(self, "No Selection", "Please select rows to toggle their checkbox state.")
+            return
+        
+        # Count how many are currently checked vs unchecked
+        checked_count = 0
+        unchecked_count = 0
+        
+        for row in selected_rows:
+            checkbox = self.fixtures_table.cellWidget(row, 0)
+            if checkbox:
+                if checkbox.isChecked():
+                    checked_count += 1
+                else:
+                    unchecked_count += 1
+        
+        # Toggle all selected rows
+        for row in selected_rows:
+            checkbox = self.fixtures_table.cellWidget(row, 0)
+            if checkbox:
+                checkbox.setChecked(not checkbox.isChecked())
+        
+        # Show status message
+        if checked_count > 0 and unchecked_count > 0:
+            self.status_text.append(f"Toggled {len(selected_rows)} selected rows (mixed state)")
+        elif checked_count > 0:
+            self.status_text.append(f"Unchecked {len(selected_rows)} selected rows")
+        else:
+            self.status_text.append(f"Checked {len(selected_rows)} selected rows")
     
     def _set_selected_as_master(self):
         """Set selected fixtures as master role."""

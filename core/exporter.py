@@ -29,15 +29,12 @@ def export_to_text(fixtures: List[Dict[str, Any]]) -> str:
             if current_fixture is not None:
                 lines.append("")
             current_fixture = item['fixture_name']
-            role_text = f" ({item['role'].title()})"
-            master_text = ""
-            if item['role'] == 'remote' and 'master_fixture_id' in item:
-                master_text = f" -> Master ID: {item['master_fixture_id']}"
             
-            lines.append(f"Fixture: {item['fixture_name']} (ID: {item['fixture_id']}){role_text}{master_text}")
+            lines.append(f"Fixture: {item['fixture_name']} (ID: {item['fixture_id']})")
             lines.append("-" * 30)
         
-        lines.append(f"  {item['attribute']:<15} Address: {item['address']:<5} Sequence: {item['sequence']}")
+        address = f"{item['universe']}.{item['channel']:03d}"
+        lines.append(f"  {item['attribute']:<15} Address: {address:<8} Sequence: {item['sequence']}")
     
     return "\n".join(lines)
 
@@ -47,14 +44,13 @@ def export_to_csv(fixtures: List[Dict[str, Any]]) -> str:
     export_data = get_export_data(fixtures)
     
     if not export_data:
-        return "fixture_name,fixture_id,attribute,address,sequence,role,master_fixture_id\n"
+        return "fixture_name,fixture_id,attribute,universe,channel,absolute_address,sequence\n"
     
     lines = []
-    lines.append("fixture_name,fixture_id,attribute,address,sequence,role,master_fixture_id")
+    lines.append("fixture_name,fixture_id,attribute,universe,channel,absolute_address,sequence")
     
     for item in export_data:
-        master_id = item.get('master_fixture_id', '')
-        lines.append(f"{item['fixture_name']},{item['fixture_id']},{item['attribute']},{item['address']},{item['sequence']},{item['role']},{master_id}")
+        lines.append(f"{item['fixture_name']},{item['fixture_id']},{item['attribute']},{item['universe']},{item['channel']},{item['absolute_address']},{item['sequence']}")
     
     return "\n".join(lines)
 
@@ -75,7 +71,9 @@ def export_to_json(fixtures: List[Dict[str, Any]]) -> str:
             }
         
         fixtures_dict[fixture_key]['attributes'][item['attribute']] = {
-            'address': item['address'],
+            'universe': item['universe'],
+            'channel': item['channel'],
+            'absolute_address': item['absolute_address'],
             'sequence': item['sequence']
         }
     
@@ -169,7 +167,8 @@ def export_to_ma3_dmx_remotes(fixtures: List[Dict[str, Any]], ma3_config: Dict[s
         dmx_remote.set("InTo", _value_to_hex(ma3_config["in_to"]))
         dmx_remote.set("OutFrom", f"{ma3_config['out_from']:6.1f}")
         dmx_remote.set("OutTo", f"{ma3_config['out_to']:6.1f}")
-        dmx_remote.set("Address", item['address'])  # Already formatted as "universe.channel"
+        address = f"{item['universe']}.{item['channel']:03d}"  # Format as "universe.channel" like "251.003"
+        dmx_remote.set("Address", address)
         dmx_remote.set("Resolution", ma3_config["resolution"])
     
     # Convert to pretty-printed XML string

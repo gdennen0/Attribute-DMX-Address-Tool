@@ -9,9 +9,9 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QPalette
+from PyQt6.QtGui import QFont, QColor, QPalette, QDrag, QPixmap
 
-from views.draggable_tables import DraggableTableWidget, DragDropTableModel
+from .draggable_tables import DraggableTableWidget, DragDropTableModel
 
 
 class FixtureGroupingTable(DraggableTableWidget):
@@ -32,6 +32,9 @@ class FixtureGroupingTable(DraggableTableWidget):
         
         # Callback for when data changes
         self._on_data_changed_callback = None
+        
+        # Flag to prevent recursion in selectionChanged
+        self._processing_selection = False
         
         # Connect drag and drop signals
         self.rowMoved.connect(self._on_row_moved)
@@ -184,50 +187,173 @@ class FixtureGroupingTable(DraggableTableWidget):
         self._update_fixture_order()
     
     def _update_fixture_order(self):
-        """Update the fixture order based on current table order."""
-        # Extract new fixture order from table
-        new_fixture_order = []
+        """Update fixture order based on current table order."""
+        # Get the current order of fixtures from the table
+        fixture_order = []
         seen_fixtures = set()
         
         for row in range(self.model().rowCount()):
-            row_data = self.model().getRowData(row)
-            fixture_id = int(row_data.get('fixture_id', 0))
-            
-            if fixture_id not in seen_fixtures:
-                new_fixture_order.append(fixture_id)
+            fixture_id = self._row_to_fixture.get(row)
+            if fixture_id is not None and fixture_id not in seen_fixtures:
+                fixture_order.append(fixture_id)
                 seen_fixtures.add(fixture_id)
         
-        # Update the fixtures list to match the new order
-        self._reorder_fixtures(new_fixture_order)
+        # Emit the fixture order changed signal
+        self.fixtureOrderChanged.emit(fixture_order)
         
-        # Emit signal
-        self.fixtureOrderChanged.emit(new_fixture_order)
-        
-        # Call callback if set
+        # Call the data changed callback if set
         if self._on_data_changed_callback:
             self._on_data_changed_callback()
     
-    def _reorder_fixtures(self, new_order):
-        """Reorder the fixtures list to match the new order."""
-        # Create a mapping from fixture_id to fixture
-        fixture_map = {fixture.get('fixture_id'): fixture for fixture in self._fixtures}
+    def get_selected_rows(self):
+        """Override to automatically include all rows of selected fixtures."""
+        # Get the base selected rows
+        base_selected = super().get_selected_rows()
         
-        # Reorder fixtures based on new order
-        reordered_fixtures = []
-        for fixture_id in new_order:
-            if fixture_id in fixture_map:
-                reordered_fixtures.append(fixture_map[fixture_id])
+        # Expand selection to include all rows of selected fixtures
+        expanded_selection = set(base_selected)
         
-        # Add any fixtures that weren't in the new order (shouldn't happen, but just in case)
-        for fixture in self._fixtures:
-            if fixture.get('fixture_id') not in new_order:
-                reordered_fixtures.append(fixture)
+        for row in base_selected:
+            fixture_id = self._row_to_fixture.get(row)
+            if fixture_id is not None:
+                # Add all rows belonging to this fixture
+                fixture_rows = self._fixture_groups.get(fixture_id, [])
+                expanded_selection.update(fixture_rows)
         
-        self._fixtures = reordered_fixtures
+        return sorted(list(expanded_selection))
     
-    def getFixtures(self) -> List[Dict[str, Any]]:
-        """Get the current fixtures list (in current order)."""
-        return self._fixtures.copy()
+    def startDrag(self, supportedActions):
+        """Override to ensure fixture-level grouping during drag operations."""
+        # Get selected rows (this will automatically include all fixture rows)
+        selected_rows = self.get_selected_rows()
+        
+        if not selected_rows:
+            return
+        
+        # Store the expanded selection for the parent class to use
+        self.drag_start_rows = selected_rows
+        
+        # Call the parent implementation which will handle the drag
+        super().startDrag(supportedActions)
+    
+    def create_drag_pixmap(self):
+        """Override to create fixture-level drag pixmap."""
+        if not hasattr(self, 'drag_start_rows') or not self.drag_start_rows:
+            return super().create_drag_pixmap()
+        
+        selected_rows = self.drag_start_rows
+        
+        # Count unique fixtures being dragged
+        fixture_ids = set()
+        for row in selected_rows:
+            fixture_id = self._row_to_fixture.get(row)
+            if fixture_id is not None:
+                fixture_ids.add(fixture_id)
+        
+        # Create text for the pixmap
+        if len(fixture_ids) == 1:
+            fixture_id = list(fixture_ids)[0]
+            fixture_name = ""
+            for fixture in self._fixtures:
+                if fixture.get('fixture_id') == fixture_id:
+                    fixture_name = fixture.get('name', f'Fixture {fixture_id}')
+                    break
+            text = f"Moving fixture: {fixture_name}"
+        else:
+            text = f"Moving {len(fixture_ids)} fixtures ({len(selected_rows)} rows)"
+        
+        # Create pixmap
+        from PyQt6.QtGui import QPainter, QFont
+        font = QFont()
+        font.setPointSize(10)
+        
+        # Calculate text size
+        painter = QPainter()
+        painter.setFont(font)
+        text_rect = painter.boundingRect(0, 0, 1000, 1000, Qt.AlignmentFlag.AlignLeft, text)
+        
+        # Create pixmap with padding
+        pixmap = QPixmap(text_rect.width() + 20, text_rect.height() + 10)
+        pixmap.fill(QColor(240, 240, 240, 200))  # Semi-transparent background
+        
+        # Draw text
+        painter.begin(pixmap)
+        painter.setFont(font)
+        painter.setPen(QColor(0, 0, 0))
+        painter.drawText(10, text_rect.height() + 5, text)
+        painter.end()
+        
+        return pixmap
+    
+    def selectRow(self, row):
+        """Override to select all rows of the fixture when selecting a single row."""
+        fixture_id = self._row_to_fixture.get(row)
+        if fixture_id is not None:
+            # Select all rows belonging to this fixture
+            fixture_rows = self._fixture_groups.get(fixture_id, [])
+            for fixture_row in fixture_rows:
+                super().selectRow(fixture_row)
+        else:
+            super().selectRow(row)
+    
+    def selectionChanged(self, selected, deselected):
+        """Override to ensure fixture-level selection when selection changes."""
+        # Prevent recursion
+        if self._processing_selection:
+            return
+        
+        # Call parent implementation first
+        super().selectionChanged(selected, deselected)
+        
+        # Get the newly selected rows
+        newly_selected = set()
+        for index in selected.indexes():
+            newly_selected.add(index.row())
+        
+        # If there are newly selected rows, expand them to include all fixture rows
+        if newly_selected:
+            self._processing_selection = True
+            
+            try:
+                expanded_selection = set()
+                
+                # Get all currently selected rows (including existing selection)
+                current_selection = set()
+                for index in self.selectedIndexes():
+                    current_selection.add(index.row())
+                
+                # Expand each selected row to include all fixture rows
+                for row in current_selection:
+                    fixture_id = self._row_to_fixture.get(row)
+                    if fixture_id is not None:
+                        fixture_rows = self._fixture_groups.get(fixture_id, [])
+                        expanded_selection.update(fixture_rows)
+                    else:
+                        expanded_selection.add(row)
+                
+                # Clear current selection and select expanded rows
+                self.clearSelection()
+                for row in sorted(expanded_selection):
+                    super().selectRow(row)
+            finally:
+                self._processing_selection = False
+    
+    def selectRows(self, rows):
+        """Override to ensure fixture-level selection."""
+        # Expand selection to include all fixture rows
+        expanded_rows = set()
+        for row in rows:
+            fixture_id = self._row_to_fixture.get(row)
+            if fixture_id is not None:
+                fixture_rows = self._fixture_groups.get(fixture_id, [])
+                expanded_rows.update(fixture_rows)
+            else:
+                expanded_rows.add(row)
+        
+        # Clear current selection and select expanded rows
+        self.clearSelection()
+        for row in sorted(expanded_rows):
+            super().selectRow(row)
     
     def setOnDataChangedCallback(self, callback: Callable[[], None]):
         """Set a callback to be called when fixture order changes."""
@@ -256,6 +382,30 @@ class FixtureGroupingTable(DraggableTableWidget):
                 selected_fixtures.add(self._row_to_fixture[row])
         
         return list(selected_fixtures)
+    
+    def get_selection_info(self):
+        """Override to show fixture-level selection information."""
+        selected_rows = self.getSelectedRows()
+        if not selected_rows:
+            return "No rows selected"
+        
+        # Count unique fixtures
+        fixture_ids = set()
+        for row in selected_rows:
+            fixture_id = self._row_to_fixture.get(row)
+            if fixture_id is not None:
+                fixture_ids.add(fixture_id)
+        
+        if len(fixture_ids) == 1:
+            fixture_id = list(fixture_ids)[0]
+            fixture_name = ""
+            for fixture in self._fixtures:
+                if fixture.get('fixture_id') == fixture_id:
+                    fixture_name = fixture.get('name', f'Fixture {fixture_id}')
+                    break
+            return f"Selected fixture: {fixture_name} ({len(selected_rows)} rows)"
+        else:
+            return f"Selected {len(fixture_ids)} fixtures ({len(selected_rows)} rows)"
     
     def moveFixtureToPosition(self, fixture_id: int, target_position: int):
         """Move a fixture to a specific position in the table."""

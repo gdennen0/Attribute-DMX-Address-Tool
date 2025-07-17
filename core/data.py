@@ -69,7 +69,6 @@ def create_fixture(name: str, fixture_type: str, mode: str, base_address: int,
         'sequences': {},   # {attribute_name: sequence_number}
         'fixture_role': 'none',  # 'master', 'remote', or 'none'
         'linked_fixtures': [],  # List of fixture IDs linked to this fixture
-        'master_fixture_id': None,  # If remote, ID of the master fixture
         **kwargs
     }
 
@@ -112,10 +111,7 @@ def set_fixture_role(fixture: Dict[str, Any], role: str):
     """Set fixture role (master or remote)."""
     if role in ['master', 'remote']:
         fixture['fixture_role'] = role
-        if role == 'master':
-            fixture['master_fixture_id'] = None
-        else:
-            fixture['linked_fixtures'] = []
+        fixture['linked_fixtures'] = []
 
 
 def get_fixture_role(fixture: Dict[str, Any]) -> str:
@@ -306,15 +302,16 @@ def get_export_data(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 # Get universe and channel for proper address formatting
                 universe = fixture['universes'].get(attr, 1)
                 channel = fixture['channels'].get(attr, 1)
-                address = f"{universe}.{channel:03d}"  # Format as "universe.channel" like "251.003"
+                absolute_address = fixture['addresses'].get(attr, 1)
                 
                 item = {
                     'fixture_name': fixture['name'],
                     'fixture_id': fixture['fixture_id'],
                     'attribute': attr,
-                    'address': address,
-                    'sequence': fixture['sequences'].get(attr, 0),
-                    'role': fixture.get('fixture_role', 'master')
+                    'universe': universe,
+                    'channel': channel,
+                    'absolute_address': absolute_address,
+                    'sequence': fixture['sequences'].get(attr, 0)
                 }
                 
                 export_data.append(item)
