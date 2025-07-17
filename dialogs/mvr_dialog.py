@@ -4,6 +4,8 @@ Allows users to select MVR file and choose fixtures to import via checkboxes.
 """
 
 from typing import List, Dict, Any, Optional
+from pathlib import Path
+
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
     QFileDialog, QMessageBox, QTableWidget, QTableWidgetItem,
@@ -13,6 +15,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 
 import core
 from .gdtf_dialog import GDTFMatchingDialog
+from .attribute_selection_dialog import AttributeSelectionDialog
 
 
 class MVRImportDialog(QDialog):
@@ -211,8 +214,9 @@ class MVRImportDialog(QDialog):
             
             # Role
             role = core.get_fixture_role(fixture)
-            role_item = QTableWidgetItem(role.title())
-            if role == 'unassigned':
+            role_display = "NONE" if role == "none" else role.title()
+            role_item = QTableWidgetItem(role_display)
+            if role == 'none':
                 role_item.setBackground(Qt.GlobalColor.yellow)
             elif role == 'master':
                 role_item.setBackground(Qt.GlobalColor.green)
@@ -332,10 +336,41 @@ class MVRImportDialog(QDialog):
                 core.set_fixture_selected(self.fixtures[row], False)
         
         if selected_fixtures:
+            # Check if any fixtures have 'none' role and show warning
+            fixtures_with_none_role = [f for f in selected_fixtures if core.get_fixture_role(f) == 'none']
+            if fixtures_with_none_role:
+                fixture_names = [f.get('name', 'Unknown') for f in fixtures_with_none_role]
+                warning_msg = f"The following fixtures have NONE role and will be imported but may not appear in the main window tables:\n\n"
+                warning_msg += "\n".join(f"• {name}" for name in fixture_names[:10])  # Show first 10
+                if len(fixture_names) > 10:
+                    warning_msg += f"\n... and {len(fixture_names) - 10} more"
+                warning_msg += "\n\nYou can assign roles during import using the role assignment buttons."
+                QMessageBox.information(self, "Role Assignment Notice", warning_msg)
+            
+            # Show attribute selection dialog after import
+            self.show_attribute_selection_dialog(selected_fixtures)
+        else:
+            QMessageBox.information(self, "No Selection", "Please select at least one fixture to import.")
+    
+    def show_attribute_selection_dialog(self, selected_fixtures: List[Dict[str, Any]]):
+        """Show the attribute selection dialog after successful import."""
+        dialog = AttributeSelectionDialog(selected_fixtures, self.config, self)
+        dialog.attributes_selected.connect(self.on_attributes_selected)
+        result = dialog.exec()
+        
+        if result == QDialog.DialogCode.Accepted:
+            # The dialog has already emitted the attributes_selected signal
+            # and applied the fixture matches, so we can proceed with import
             self.fixtures_imported.emit(selected_fixtures)
             self.accept()
         else:
-            QMessageBox.information(self, "No Selection", "Please select at least one fixture to import.")
+            # User cancelled the attribute selection, so we don't import
+            pass
+    
+    def on_attributes_selected(self, selected_attributes: List[str]):
+        """Handle attributes selected from the attribute selection dialog."""
+        # Save selected attributes to config
+        self.config.set_selected_attributes(selected_attributes)
 
 
 from pathlib import Path 

@@ -170,13 +170,14 @@ def process_fixtures_for_export(fixtures: List[Dict[str, Any]],
     assign_sequences(export_fixtures, selected_attributes, sequence_start)
 
 
-def get_available_attributes(fixtures: List[Dict[str, Any]]) -> List[str]:
-    """Get all available attributes from matched fixtures."""
-    attributes = set()
-    
-    for fixture in fixtures:
-        if fixture.get('matched') and fixture.get('selected'):
-            for attr in fixture.get('attributes', {}):
-                attributes.add(attr)
-    
-    return sorted(list(attributes)) 
+def calculate_universe_and_channel(address: int) -> tuple[int, int]:
+    """Calculate universe and channel from absolute DMX address."""
+    # DMX addresses are 1-based, universes are 1-based, channels are 1-based
+    universe = ((address - 1) // 512) + 1
+    channel = ((address - 1) % 512) + 1
+    return universe, channel
+
+
+def get_fixture_role(fixture: Dict[str, Any]) -> str:
+    """Get the role of a fixture (master, remote, or none)."""
+    return fixture.get('fixture_role', 'none') 

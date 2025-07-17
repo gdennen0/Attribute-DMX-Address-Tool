@@ -11,14 +11,17 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTextEdit, QTableWidget, QTableWidgetItem,
     QHeaderView, QCheckBox, QGroupBox, QMenuBar, QMenu, QComboBox,
-    QFileDialog, QMessageBox, QSplitter, QScrollArea
+    QFileDialog, QMessageBox, QSplitter, QScrollArea, QSizePolicy,
+    QInputDialog, QDialog
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QFont
 
 from config import Config
 import core
-from dialogs import MVRImportDialog, CSVImportDialog, SettingsDialog, FixtureLinkingDialog
+from core.project import project_manager
+from dialogs import MVRImportDialog, CSVImportDialog, SettingsDialog, AttributeSelectionDialog
+from views.fixture_grouping_table import FixtureGroupingTable
 
 
 class MainWindow(QMainWindow):
@@ -32,7 +35,7 @@ class MainWindow(QMainWindow):
         self.project_state = core.create_project_state()
         
         self.setWindowTitle("AttributeAddresser")
-        self.setMinimumSize(1000, 700)
+        self.setMinimumSize(1400, 800)  # Increased from 1000x700 to 1400x800
         
         self._setup_ui()
         self._update_ui_state()
@@ -53,17 +56,14 @@ class MainWindow(QMainWindow):
         toolbar_layout = QHBoxLayout()
         self.import_mvr_button = QPushButton("Import MVR...")
         self.import_csv_button = QPushButton("Import CSV...")
-        self.link_fixtures_button = QPushButton("Link Fixtures...")
         self.settings_button = QPushButton("Settings")
         
         self.import_mvr_button.clicked.connect(self._import_mvr)
         self.import_csv_button.clicked.connect(self._import_csv)
-        self.link_fixtures_button.clicked.connect(self._open_fixture_linking)
         self.settings_button.clicked.connect(self._open_settings)
         
         toolbar_layout.addWidget(self.import_mvr_button)
         toolbar_layout.addWidget(self.import_csv_button)
-        toolbar_layout.addWidget(self.link_fixtures_button)
         toolbar_layout.addStretch()
         toolbar_layout.addWidget(self.settings_button)
         main_layout.addLayout(toolbar_layout)
@@ -75,12 +75,11 @@ class MainWindow(QMainWindow):
         left_panel = self._setup_fixtures_panel()
         content_splitter.addWidget(left_panel)
         
-        # Right panel - Attributes and Export
-        right_panel = self._setup_export_panel()
-        content_splitter.addWidget(right_panel)
-        
+        # Right panel - (removed export panel)
+        # right_panel = self._setup_export_panel()
+        # content_splitter.addWidget(right_panel)
         content_splitter.setSizes([600, 400])
-        main_layout.addWidget(content_splitter)
+        main_layout.addWidget(content_splitter, stretch=1)
         
         # Status bar
         self.status_label = QLabel("Ready")
@@ -93,6 +92,23 @@ class MainWindow(QMainWindow):
         # File menu
         file_menu = menubar.addMenu("File")
         
+        save_project_action = QAction("Save Project...", self)
+        save_project_action.setShortcut("Ctrl+S")
+        save_project_action.triggered.connect(self._save_project)
+        file_menu.addAction(save_project_action)
+        
+        save_as_project_action = QAction("Save Project As...", self)
+        save_as_project_action.setShortcut("Ctrl+Shift+S")
+        save_as_project_action.triggered.connect(self._save_project_as)
+        file_menu.addAction(save_as_project_action)
+        
+        load_project_action = QAction("Load Project...", self)
+        load_project_action.setShortcut("Ctrl+O")
+        load_project_action.triggered.connect(self._load_project)
+        file_menu.addAction(load_project_action)
+        
+        file_menu.addSeparator()
+        
         import_mvr_action = QAction("Import MVR...", self)
         import_mvr_action.triggered.connect(self._import_mvr)
         file_menu.addAction(import_mvr_action)
@@ -100,12 +116,6 @@ class MainWindow(QMainWindow):
         import_csv_action = QAction("Import CSV...", self)
         import_csv_action.triggered.connect(self._import_csv)
         file_menu.addAction(import_csv_action)
-        
-        file_menu.addSeparator()
-        
-        link_fixtures_action = QAction("Link Fixtures...", self)
-        link_fixtures_action.triggered.connect(self._open_fixture_linking)
-        file_menu.addAction(link_fixtures_action)
         
         file_menu.addSeparator()
         
@@ -132,6 +142,7 @@ class MainWindow(QMainWindow):
         
         # Create splitter for side-by-side tables
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
         # Master fixtures panel
         master_panel = self._setup_master_fixtures_panel()
@@ -154,6 +165,8 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.clear_fixtures_button)
         layout.addLayout(controls_layout)
         
+        # Ensure the panel stretches vertically
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         return panel
     
     def _setup_master_fixtures_panel(self) -> QGroupBox:
@@ -162,23 +175,33 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         
         # Master fixtures table
-        self.master_table = QTableWidget()
+        self.master_table = FixtureGroupingTable()
+        self.master_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._setup_master_table()
         layout.addWidget(self.master_table)
         
-        # Master controls
-        controls_layout = QHBoxLayout()
+        # Master actions layout
+        master_actions_widget = QWidget()
+        master_actions_widget.setFixedHeight(40)  # Fixed height to keep tables aligned
+        master_actions_layout = QHBoxLayout(master_actions_widget)
+        master_actions_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
         
-        self.select_all_masters_button = QPushButton("Select All")
-        self.select_none_masters_button = QPushButton("Select None")
+        self.apply_sequences_button = QPushButton("Apply sequence numbers")
+        self.apply_sequences_button.clicked.connect(self._apply_sequence_numbers)
         
-        self.select_all_masters_button.clicked.connect(self._select_all_masters)
-        self.select_none_masters_button.clicked.connect(self._select_none_masters)
+        # Renumber Sequences button
+        self.renumber_sequences_button = QPushButton("Renumber Sequences")
+        self.renumber_sequences_button.clicked.connect(self._renumber_sequences)
         
-        controls_layout.addWidget(self.select_all_masters_button)
-        controls_layout.addWidget(self.select_none_masters_button)
-        controls_layout.addStretch()
-        layout.addLayout(controls_layout)
+        # Export MA3 Sequences button
+        self.export_ma3_sequences_button = QPushButton("Export MA3 Sequences")
+        self.export_ma3_sequences_button.clicked.connect(self._export_ma3_sequences)
+        
+        master_actions_layout.addStretch()
+        master_actions_layout.addWidget(self.apply_sequences_button)
+        master_actions_layout.addWidget(self.renumber_sequences_button)
+        master_actions_layout.addWidget(self.export_ma3_sequences_button)
+        layout.addWidget(master_actions_widget)
         
         return panel
     
@@ -188,135 +211,42 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         
         # Remote fixtures table
-        self.remote_table = QTableWidget()
+        self.remote_table = FixtureGroupingTable()
+        self.remote_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._setup_remote_table()
         layout.addWidget(self.remote_table)
         
-        # Remote controls
-        controls_layout = QHBoxLayout()
+        # Remote actions layout (empty for now, but same height to keep tables aligned)
+        remote_actions_widget = QWidget()
+        remote_actions_widget.setFixedHeight(40)  # Same fixed height as master actions
+        remote_actions_layout = QHBoxLayout(remote_actions_widget)
+        remote_actions_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
         
-        self.select_all_remotes_button = QPushButton("Select All")
-        self.select_none_remotes_button = QPushButton("Select None")
+        # Add a spacer to maintain layout consistency
+        remote_actions_layout.addStretch()
         
-        self.select_all_remotes_button.clicked.connect(self._select_all_remotes)
-        self.select_none_remotes_button.clicked.connect(self._select_none_remotes)
+        # Export MA3 Remotes button
+        self.export_ma3_remotes_button = QPushButton("Export MA3 Remotes")
+        self.export_ma3_remotes_button.clicked.connect(self._export_ma3_remotes)
+        remote_actions_layout.addWidget(self.export_ma3_remotes_button)
         
-        controls_layout.addWidget(self.select_all_remotes_button)
-        controls_layout.addWidget(self.select_none_remotes_button)
-        controls_layout.addStretch()
-        layout.addLayout(controls_layout)
-        
-        return panel
-    
-    def _setup_export_panel(self) -> QWidget:
-        """Set up the export panel."""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        
-        # Attributes selection
-        attributes_group = QGroupBox("Select Attributes")
-        attributes_layout = QVBoxLayout(attributes_group)
-        
-        # Available attributes (scrollable)
-        self.attributes_scroll = QScrollArea()
-        self.attributes_widget = QWidget()
-        self.attributes_layout = QVBoxLayout(self.attributes_widget)
-        self.attributes_scroll.setWidget(self.attributes_widget)
-        self.attributes_scroll.setWidgetResizable(True)
-        self.attributes_scroll.setMaximumHeight(250)
-        
-        attributes_layout.addWidget(self.attributes_scroll)
-        
-        # Attribute controls
-        attr_controls_layout = QHBoxLayout()
-        self.select_all_attrs_button = QPushButton("Select All")
-        self.select_none_attrs_button = QPushButton("Select None")
-        
-        self.select_all_attrs_button.clicked.connect(self._select_all_attributes)
-        self.select_none_attrs_button.clicked.connect(self._select_none_attributes)
-        
-        attr_controls_layout.addWidget(self.select_all_attrs_button)
-        attr_controls_layout.addWidget(self.select_none_attrs_button)
-        attr_controls_layout.addStretch()
-        attributes_layout.addLayout(attr_controls_layout)
-        
-        layout.addWidget(attributes_group)
-        
-        # Export options
-        export_group = QGroupBox("Export")
-        export_layout = QVBoxLayout(export_group)
-        
-        # Format selection
-        format_layout = QHBoxLayout()
-        format_layout.addWidget(QLabel("Format:"))
-        self.export_format_combo = QComboBox()
-        self.export_format_combo.addItems(core.get_export_formats())
-        format_layout.addWidget(self.export_format_combo)
-        format_layout.addStretch()
-        export_layout.addLayout(format_layout)
-        
-        # Export buttons
-        export_buttons_layout = QHBoxLayout()
-        self.preview_button = QPushButton("Preview")
-        self.export_button = QPushButton("Export to File...")
-        
-        self.preview_button.clicked.connect(self._preview_export)
-        self.export_button.clicked.connect(self._export_to_file)
-        
-        export_buttons_layout.addWidget(self.preview_button)
-        export_buttons_layout.addWidget(self.export_button)
-        export_layout.addLayout(export_buttons_layout)
-        
-        layout.addWidget(export_group)
-        
-        # Preview area
-        preview_group = QGroupBox("Preview")
-        preview_layout = QVBoxLayout(preview_group)
-        
-        self.preview_text = QTextEdit()
-        self.preview_text.setReadOnly(True)
-        self.preview_text.setFont(QFont("Courier", 9))
-        preview_layout.addWidget(self.preview_text)
-        
-        layout.addWidget(preview_group)
+        layout.addWidget(remote_actions_widget)
         
         return panel
     
     def _setup_master_table(self):
         """Set up the master fixtures table."""
-        headers = ["Select", "Name", "Type", "Mode", "Address", "ID", "Role", "Linked Remotes", "Status"]
-        self.master_table.setColumnCount(len(headers))
-        self.master_table.setHorizontalHeaderLabels(headers)
-        
-        # Configure column sizing
-        header = self.master_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        for i in range(3, len(headers)):
-            header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
-        
-        self.master_table.setColumnWidth(0, 60)
-        self.master_table.setAlternatingRowColors(True)
-        self.master_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        # The FixtureGroupingTable handles its own setup
+        # Connect the fixture order changed signal
+        self.master_table.fixtureOrderChanged.connect(self._on_master_fixture_order_changed)
+        self.master_table.setOnDataChangedCallback(self._on_master_data_changed)
     
     def _setup_remote_table(self):
         """Set up the remote fixtures table."""
-        headers = ["Select", "Name", "Type", "Mode", "Address", "ID", "Role", "Master", "Status"]
-        self.remote_table.setColumnCount(len(headers))
-        self.remote_table.setHorizontalHeaderLabels(headers)
-        
-        # Configure column sizing
-        header = self.remote_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        for i in range(3, len(headers)):
-            header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
-        
-        self.remote_table.setColumnWidth(0, 60)
-        self.remote_table.setAlternatingRowColors(True)
-        self.remote_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        # The FixtureGroupingTable handles its own setup
+        # Connect the fixture order changed signal
+        self.remote_table.fixtureOrderChanged.connect(self._on_remote_fixture_order_changed)
+        self.remote_table.setOnDataChangedCallback(self._on_remote_data_changed)
     
     def _import_mvr(self):
         """Open MVR import dialog."""
@@ -335,21 +265,26 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self.config, self)
         dialog.exec()
     
-    def _open_fixture_linking(self):
-        """Open fixture linking dialog."""
-        if not self.project_state['fixtures']:
-            QMessageBox.information(self, "No Fixtures", "Please import some fixtures first.")
-            return
-        
-        dialog = FixtureLinkingDialog(self.project_state['fixtures'], self)
-        dialog.relationships_updated.connect(self._update_fixtures_tables)
-        dialog.exec()
-    
     def _add_fixtures(self, fixtures: List[Dict[str, Any]]):
         """Add imported fixtures to the project."""
+        # Validate fixtures before adding
+        for fixture in fixtures:
+            if not self.validate_fixture_data():
+                print(f"Warning: Fixture {fixture.get('name', 'Unknown')} has invalid role")
+        
         self.project_state['fixtures'].extend(fixtures)
+        
+        # Validate fixture roles for consistency after addition
+        if not self.validate_fixture_data():
+            print("Warning: Some fixtures have invalid roles")
+        
+        # Assign sequences only to master fixtures (not remote fixtures on import)
+        matched_master_fixtures = self.get_master_fixtures_matched()
+        if matched_master_fixtures:
+            core.assign_sequences(matched_master_fixtures, 1001)
+        
         self._update_fixtures_tables()
-        self._update_attributes_list()
+        self._update_status_info()
         self._update_ui_state()
         
         count = len(fixtures)
@@ -362,175 +297,103 @@ class MainWindow(QMainWindow):
     
     def _update_master_table(self):
         """Update the master fixtures table display."""
-        fixtures = self.project_state['fixtures']
-        # Show master fixtures and unassigned fixtures (for manual assignment)
-        master_fixtures = [f for f in fixtures if core.get_fixture_role(f) in ['master', 'unassigned']]
+        # Get master fixtures using centralized access method
+        master_fixtures = self.get_master_fixtures()
         
-        self.master_table.setRowCount(len(master_fixtures))
-        
-        for row, fixture in enumerate(master_fixtures):
-            # Checkbox
-            checkbox = QCheckBox()
-            checkbox.setChecked(fixture.get('selected', True))
-            checkbox.stateChanged.connect(lambda state, f=fixture: self._master_selection_changed(f, state))
-            self.master_table.setCellWidget(row, 0, checkbox)
-            
-            # Fixture data
-            self.master_table.setItem(row, 1, QTableWidgetItem(fixture.get('name', '')))
-            self.master_table.setItem(row, 2, QTableWidgetItem(fixture.get('type', '')))
-            self.master_table.setItem(row, 3, QTableWidgetItem(fixture.get('mode', '')))
-            self.master_table.setItem(row, 4, QTableWidgetItem(str(fixture.get('base_address', 1))))
-            self.master_table.setItem(row, 5, QTableWidgetItem(str(fixture.get('fixture_id', 0))))
-            
-            # Role
-            role = core.get_fixture_role(fixture)
-            role_item = QTableWidgetItem(role.title())
-            if role == 'unassigned':
-                role_item.setBackground(Qt.GlobalColor.yellow)
-            elif role == 'master':
-                role_item.setBackground(Qt.GlobalColor.green)
-            self.master_table.setItem(row, 6, role_item)
-            
-            # Linked remotes
-            linked_remotes = core.get_linked_remotes(fixture, fixtures)
-            if linked_remotes:
-                remote_names = [r['name'] for r in linked_remotes]
-                relationship_info = f"{', '.join(remote_names[:2])}"
-                if len(remote_names) > 2:
-                    relationship_info += f" (+{len(remote_names) - 2} more)"
-            else:
-                relationship_info = "No remotes"
-            
-            self.master_table.setItem(row, 7, QTableWidgetItem(relationship_info))
-            
-            # Status
-            status = "Matched" if fixture.get('matched') else "Unmatched"
-            status_item = QTableWidgetItem(status)
-            if fixture.get('matched'):
-                status_item.setBackground(Qt.GlobalColor.green)
-            else:
-                status_item.setBackground(Qt.GlobalColor.lightGray)
-            self.master_table.setItem(row, 8, status_item)
-    
+        # Update the fixture grouping table
+        self.master_table.setFixtures(master_fixtures)
+
     def _update_remote_table(self):
         """Update the remote fixtures table display."""
+        # Get remote fixtures using centralized access method
+        remote_fixtures = self.get_remote_fixtures()
+        
+        # Update the fixture grouping table
+        self.remote_table.setFixtures(remote_fixtures)
+    
+    def _on_master_fixture_order_changed(self, new_order):
+        """Handle when master fixture order changes."""
+        # Update the project state with the new fixture order
+        master_fixtures = self.get_master_fixtures()
+        fixture_map = {fixture.get('fixture_id'): fixture for fixture in master_fixtures}
+        
+        # Reorder fixtures based on new order
+        reordered_fixtures = []
+        for fixture_id in new_order:
+            if fixture_id in fixture_map:
+                reordered_fixtures.append(fixture_map[fixture_id])
+        
+        # Update the project state
+        all_fixtures = self.project_state['fixtures']
+        remote_fixtures = self.get_remote_fixtures()
+        
+        # Replace master fixtures with reordered ones
+        self.project_state['fixtures'] = reordered_fixtures + remote_fixtures
+        
+        # Update status
+        self.status_label.setText(f"Master fixture order updated")
+    
+    def _on_remote_fixture_order_changed(self, new_order):
+        """Handle when remote fixture order changes."""
+        # Update the project state with the new fixture order
+        remote_fixtures = self.get_remote_fixtures()
+        fixture_map = {fixture.get('fixture_id'): fixture for fixture in remote_fixtures}
+        
+        # Reorder fixtures based on new order
+        reordered_fixtures = []
+        for fixture_id in new_order:
+            if fixture_id in fixture_map:
+                reordered_fixtures.append(fixture_map[fixture_id])
+        
+        # Update the project state
+        master_fixtures = self.get_master_fixtures()
+        
+        # Replace remote fixtures with reordered ones
+        self.project_state['fixtures'] = master_fixtures + reordered_fixtures
+        
+        # Update status
+        self.status_label.setText(f"Remote fixture order updated")
+    
+    def _on_master_data_changed(self):
+        """Handle when master table data changes."""
+        # This is called when fixtures are reordered in the master table
+        # The fixture order is already updated in the table, so we just need to sync
+        pass
+    
+    def _on_remote_data_changed(self):
+        """Handle when remote table data changes."""
+        # This is called when fixtures are reordered in the remote table
+        # The fixture order is already updated in the table, so we just need to sync
+        pass
+    
+    def _update_status_info(self):
+        """Update the status information display."""
         fixtures = self.project_state['fixtures']
-        # Show remote fixtures and unassigned fixtures (for manual assignment)  
-        remote_fixtures = [f for f in fixtures if core.get_fixture_role(f) in ['remote', 'unassigned']]
+        if not fixtures:
+            self.status_label.setText("No fixtures imported. Use Import MVR or Import CSV to get started.")
+            return
         
-        self.remote_table.setRowCount(len(remote_fixtures))
+        # Get selected attributes from config
+        selected_attributes = self.config.get_selected_attributes()
         
-        for row, fixture in enumerate(remote_fixtures):
-            # Checkbox
-            checkbox = QCheckBox()
-            checkbox.setChecked(fixture.get('selected', True))
-            checkbox.stateChanged.connect(lambda state, f=fixture: self._remote_selection_changed(f, state))
-            self.remote_table.setCellWidget(row, 0, checkbox)
-            
-            # Fixture data
-            self.remote_table.setItem(row, 1, QTableWidgetItem(fixture.get('name', '')))
-            self.remote_table.setItem(row, 2, QTableWidgetItem(fixture.get('type', '')))
-            self.remote_table.setItem(row, 3, QTableWidgetItem(fixture.get('mode', '')))
-            self.remote_table.setItem(row, 4, QTableWidgetItem(str(fixture.get('base_address', 1))))
-            self.remote_table.setItem(row, 5, QTableWidgetItem(str(fixture.get('fixture_id', 0))))
-            
-            # Role
-            role = core.get_fixture_role(fixture)
-            role_item = QTableWidgetItem(role.title())
-            if role == 'unassigned':
-                role_item.setBackground(Qt.GlobalColor.yellow)
-            elif role == 'remote':
-                role_item.setBackground(Qt.GlobalColor.cyan)
-            self.remote_table.setItem(row, 6, role_item)
-            
-            # Master fixture
-            master_fixture = core.get_master_for_remote(fixture, fixtures)
-            if master_fixture:
-                relationship_info = f"{master_fixture['name']}"
-            else:
-                relationship_info = "No master"
-            
-            self.remote_table.setItem(row, 7, QTableWidgetItem(relationship_info))
-            
-            # Status
-            status = "Matched" if fixture.get('matched') else "Unmatched"
-            status_item = QTableWidgetItem(status)
-            if fixture.get('matched'):
-                status_item.setBackground(Qt.GlobalColor.green)
-            else:
-                status_item.setBackground(Qt.GlobalColor.lightGray)
-            self.remote_table.setItem(row, 8, status_item)
-    
-    def _update_attributes_list(self):
-        """Update the available attributes list."""
-        # Clear existing checkboxes
-        for i in reversed(range(self.attributes_layout.count())):
-            child = self.attributes_layout.itemAt(i).widget()
-            if child:
-                child.setParent(None)
+        # Get fixture statistics using centralized access method
+        stats = self.get_fixture_statistics()
         
-        # Get available attributes
-        available_attributes = core.get_available_attributes(self.project_state['fixtures'])
+        status_text = f"Project Status:\n"
+        status_text += f"• Total fixtures: {stats['total_fixtures']}\n"
+        status_text += f"• Master fixtures: {stats['master_fixtures']} ({stats['master_matched']} matched)\n"
+        status_text += f"• Remote fixtures: {stats['remote_fixtures']} ({stats['remote_matched']} matched)\n"
+        if stats['unassigned_fixtures'] > 0:
+            status_text += f"• Unassigned fixtures: {stats['unassigned_fixtures']}\n"
+        status_text += f"• Selected attributes: {len(selected_attributes)}"
         
-        # Create checkboxes for each attribute
-        for attr in available_attributes:
-            checkbox = QCheckBox(attr)
-            checkbox.setChecked(attr in self.project_state['selected_attributes'])
-            checkbox.stateChanged.connect(lambda state, attribute=attr: self._attribute_selection_changed(attribute, state))
-            self.attributes_layout.addWidget(checkbox)
+        if selected_attributes:
+            status_text += f" ({', '.join(selected_attributes[:5])}"
+            if len(selected_attributes) > 5:
+                status_text += f" +{len(selected_attributes) - 5} more"
+            status_text += ")"
         
-        # Add stretch at the end
-        self.attributes_layout.addStretch()
-    
-    def _master_selection_changed(self, fixture: Dict[str, Any], state: int):
-        """Handle master fixture selection change."""
-        selected = state == Qt.CheckState.Checked.value
-        core.set_fixture_selected(fixture, selected)
-        self._update_attributes_list()
-    
-    def _remote_selection_changed(self, fixture: Dict[str, Any], state: int):
-        """Handle remote fixture selection change."""
-        selected = state == Qt.CheckState.Checked.value
-        core.set_fixture_selected(fixture, selected)
-        self._update_attributes_list()
-    
-    def _attribute_selection_changed(self, attribute: str, state: int):
-        """Handle attribute selection change."""
-        selected = state == Qt.CheckState.Checked.value
-        if selected and attribute not in self.project_state['selected_attributes']:
-            self.project_state['selected_attributes'].append(attribute)
-        elif not selected and attribute in self.project_state['selected_attributes']:
-            self.project_state['selected_attributes'].remove(attribute)
-    
-    def _select_all_masters(self):
-        """Select all master fixtures."""
-        for row in range(self.master_table.rowCount()):
-            checkbox = self.master_table.cellWidget(row, 0)
-            if checkbox:
-                checkbox.setChecked(True)
-    
-    def _select_none_masters(self):
-        """Deselect all master fixtures."""
-        for row in range(self.master_table.rowCount()):
-            checkbox = self.master_table.cellWidget(row, 0)
-            if checkbox:
-                checkbox.setChecked(False)
-    
-    def _select_all_remotes(self):
-        """Select all remote fixtures."""
-        for row in range(self.remote_table.rowCount()):
-            checkbox = self.remote_table.cellWidget(row, 0)
-            if checkbox:
-                checkbox.setChecked(True)
-    
-    def _select_none_remotes(self):
-        """Deselect all remote fixtures."""
-        for row in range(self.remote_table.rowCount()):
-            checkbox = self.remote_table.cellWidget(row, 0)
-            if checkbox:
-                checkbox.setChecked(False)
-    
-
+        self.status_label.setText(status_text)
     
     def _clear_fixtures(self):
         """Clear all fixtures."""
@@ -542,132 +405,285 @@ class MainWindow(QMainWindow):
         
         if reply == QMessageBox.StandardButton.Yes:
             self.project_state['fixtures'].clear()
-            self.project_state['selected_attributes'].clear()
             self._update_fixtures_tables()
-            self._update_attributes_list()
+            self._update_status_info()
             self._update_ui_state()
             self.status_label.setText("Cleared all fixtures")
     
-    def _select_all_attributes(self):
-        """Select all attributes."""
-        for i in range(self.attributes_layout.count()):
-            item = self.attributes_layout.itemAt(i)
-            if item and item.widget() and isinstance(item.widget(), QCheckBox):
-                item.widget().setChecked(True)
-    
-    def _select_none_attributes(self):
-        """Deselect all attributes."""
-        for i in range(self.attributes_layout.count()):
-            item = self.attributes_layout.itemAt(i)
-            if item and item.widget() and isinstance(item.widget(), QCheckBox):
-                item.widget().setChecked(False)
-    
-    def _preview_export(self):
-        """Preview export data."""
-        if not self.project_state['selected_attributes']:
-            QMessageBox.information(self, "No Attributes", "Please select at least one attribute to export.")
+    def _apply_sequence_numbers(self):
+        """Apply sequence numbers from master fixtures to remote fixtures by row number."""
+        # Get master and remote fixtures using centralized access methods
+        master_fixtures = self.get_master_fixtures()
+        remote_fixtures = self.get_remote_fixtures()
+        
+        if not master_fixtures:
+            QMessageBox.warning(self, "No Master Fixtures", "No master fixtures found. Please import fixtures and set some as master first.")
             return
         
-        if not any(f.get('selected') for f in self.project_state['fixtures']):
-            QMessageBox.information(self, "No Fixtures", "Please select at least one fixture to export.")
+        if not remote_fixtures:
+            QMessageBox.warning(self, "No Remote Fixtures", "No remote fixtures found. Please import fixtures and set some as remote first.")
             return
         
-        # Process fixtures for export
-        core.process_fixtures_for_export(
-            self.project_state['fixtures'],
-            self.project_state['selected_attributes'],
-            self.config.get_sequence_start_number()
+        # Build master attribute rows (same logic as in _update_master_table)
+        master_attribute_rows = []
+        for fixture in master_fixtures:
+            if fixture.get('matched', False):
+                # Get sorted attributes from the fixture's GDTF profile model
+                profile_model = fixture.get('gdtf_profile')
+                if profile_model:
+                    selected_attributes = profile_model.get_sorted_attributes()
+                else:
+                    # Fallback to unsorted attributes if no profile model
+                    selected_attributes = list(fixture.get('attributes', {}).keys())
+                
+                for attr_name in selected_attributes:
+                    if attr_name in fixture.get('attributes', {}):
+                        sequence_num = fixture.get('sequences', {}).get(attr_name, '—')
+                        master_attribute_rows.append({
+                            'fixture_id': fixture.get('fixture_id', 0),
+                            'fixture_name': fixture.get('name', ''),
+                            'attribute': attr_name,
+                            'sequence': sequence_num,
+                            'fixture': fixture
+                        })
+        
+        # Build remote attribute rows (same logic as in _update_remote_table)
+        remote_attribute_rows = []
+        for fixture in remote_fixtures:
+            if fixture.get('matched', False):
+                # Get sorted attributes from the fixture's GDTF profile model
+                profile_model = fixture.get('gdtf_profile')
+                if profile_model:
+                    selected_attributes = profile_model.get_sorted_attributes()
+                else:
+                    # Fallback to unsorted attributes if no profile model
+                    selected_attributes = list(fixture.get('attributes', {}).keys())
+                
+                for attr_name in selected_attributes:
+                    if attr_name in fixture.get('attributes', {}):
+                        remote_attribute_rows.append({
+                            'fixture_id': fixture.get('fixture_id', 0),
+                            'fixture_name': fixture.get('name', ''),
+                            'attribute': attr_name,
+                            'fixture': fixture
+                        })
+        
+        # Apply sequences by row number
+        applied_count = 0
+        min_rows = min(len(master_attribute_rows), len(remote_attribute_rows))
+        
+        for i in range(min_rows):
+            master_row = master_attribute_rows[i]
+            remote_row = remote_attribute_rows[i]
+            
+            # Only apply if master has a valid sequence number
+            if master_row['sequence'] != '—' and master_row['sequence'] != '':
+                remote_fixture = remote_row['fixture']
+                attr_name = remote_row['attribute']
+                
+                # Initialize sequences dict if it doesn't exist
+                if 'sequences' not in remote_fixture:
+                    remote_fixture['sequences'] = {}
+                
+                # Copy sequence number
+                remote_fixture['sequences'][attr_name] = master_row['sequence']
+                applied_count += 1
+        
+        # Update the tables to show the changes
+        self._update_fixtures_tables()
+        
+        # Show result
+        if applied_count > 0:
+            self.status_label.setText(f"Applied {applied_count} sequence number{'s' if applied_count != 1 else ''} from master to remote fixtures")
+        else:
+            QMessageBox.information(self, "No Sequences Applied", "No sequence numbers were applied. Make sure master fixtures have sequence numbers assigned.")
+    
+    def _renumber_sequences(self):
+        """Renumber sequences for master fixtures based on current order and user settings."""
+        from dialogs import RenumberSequencesDialog
+        
+        # Get master fixtures using centralized access method
+        master_fixtures = self.get_master_fixtures()
+        
+        if not master_fixtures:
+            QMessageBox.warning(self, "No Master Fixtures", "No master fixtures found. Please import fixtures and set some as master first.")
+            return
+        
+        # Show configuration dialog
+        dialog = RenumberSequencesDialog(self.config, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        
+        # Get settings from dialog
+        settings = dialog.get_settings()
+        start_number = settings["start_number"]
+        interval = settings["interval"]
+        add_breaks = settings["add_breaks"]
+        break_sequences = settings["break_sequences"]
+        
+        # Renumber sequences
+        sequence_num = start_number
+        total_sequences = 0
+        
+        for fixture in master_fixtures:
+            if fixture.get('matched', False):
+                # Initialize sequences dict if it doesn't exist
+                if 'sequences' not in fixture:
+                    fixture['sequences'] = {}
+                
+                # Get sorted attributes from the fixture's GDTF profile model
+                profile_model = fixture.get('gdtf_profile')
+                if profile_model:
+                    sorted_attributes = profile_model.get_sorted_attributes()
+                else:
+                    # Fallback to unsorted attributes if no profile model
+                    sorted_attributes = list(fixture.get('attributes', {}).keys())
+                
+                # Assign sequences to each attribute
+                for attr_name in sorted_attributes:
+                    if attr_name in fixture.get('attributes', {}):
+                        fixture['sequences'][attr_name] = sequence_num
+                        sequence_num += interval
+                        total_sequences += 1
+                
+                # Add break after all attributes for this fixture if enabled
+                if add_breaks:
+                    sequence_num += break_sequences
+        
+        # Update the tables to show the changes
+        self._update_fixtures_tables()
+        
+        # Show result
+        self.status_label.setText(f"Renumbered {total_sequences} sequence{'s' if total_sequences != 1 else ''} starting from {start_number}")
+        QMessageBox.information(
+            self,
+            "Sequences Renumbered",
+            f"Successfully renumbered {total_sequences} sequence{'s' if total_sequences != 1 else ''}.\n\n"
+            f"Starting number: {start_number}\n"
+            f"Interval: {interval}\n"
+            f"Breaks: {'Yes' if add_breaks else 'No'}"
+            + (f"\nBreak sequences: {break_sequences}" if add_breaks else "")
         )
-        
-        # Generate preview
-        export_format = self.export_format_combo.currentText()
-        ma3_config = self.config.get_ma3_xml_config() if export_format == 'ma3_xml' else None
-        
-        export_content = core.export_fixtures(
-            self.project_state['fixtures'],
-            self.project_state['selected_attributes'],
-            export_format,
-            ma3_config
-        )
-        
-        self.preview_text.setPlainText(export_content)
-        self.status_label.setText(f"Generated {export_format} preview")
     
-    def _export_to_file(self):
-        """Export data to file."""
-        if not self.project_state['selected_attributes']:
-            QMessageBox.information(self, "No Attributes", "Please select at least one attribute to export.")
+    def _export_ma3_remotes(self):
+        """Export remote fixtures as MA3 DMX Remotes XML."""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        # Get remote fixtures only using centralized access method
+        remote_fixtures = self.get_remote_fixtures()
+        
+        if not remote_fixtures:
+            QMessageBox.warning(self, "No Remote Fixtures", "No remote fixtures found to export.")
             return
         
-        if not any(f.get('selected') for f in self.project_state['fixtures']):
-            QMessageBox.information(self, "No Fixtures", "Please select at least one fixture to export.")
-            return
+        # Get MA3 configuration from settings
+        ma3_config = self.config.get_ma3_xml_config()
         
-        # Choose file
-        export_format = self.export_format_combo.currentText()
-        file_ext = {
-            'text': 'txt',
-            'csv': 'csv', 
-            'json': 'json',
-            'ma3_xml': 'xml'
-        }.get(export_format, 'txt')
-        
+        # Get save file path from user
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Export File",
-            self.config.get_last_export_directory(),
-            f"{export_format.upper()} Files (*.{file_ext})"
+            "Export MA3 DMX Remotes",
+            str(Path.home() / "ma3_dmx_remotes.xml"),
+            "MA3 XML Files (*.xml)"
         )
         
         if not file_path:
             return
         
-        self.config.set_last_export_directory(str(Path(file_path).parent))
-        
         try:
-            # Process fixtures for export
-            core.process_fixtures_for_export(
-                self.project_state['fixtures'],
-                self.project_state['selected_attributes'],
-                self.config.get_sequence_start_number()
-            )
+            # Export using the core exporter
+            from core.exporter import export_to_ma3_dmx_remotes
             
-            # Generate export content
-            ma3_config = self.config.get_ma3_xml_config() if export_format == 'ma3_xml' else None
-            export_content = core.export_fixtures(
-                self.project_state['fixtures'],
-                self.project_state['selected_attributes'],
-                export_format,
-                ma3_config
-            )
+            # Generate the XML - pass fixtures directly
+            xml_content = export_to_ma3_dmx_remotes(remote_fixtures, ma3_config)
             
             # Save to file
-            if core.save_export_to_file(export_content, file_path):
-                QMessageBox.information(self, "Export Complete", f"Successfully exported to {Path(file_path).name}")
-                self.status_label.setText(f"Exported to {Path(file_path).name}")
-            else:
-                QMessageBox.warning(self, "Export Failed", "Failed to save export file.")
-                
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(xml_content)
+            
+            QMessageBox.information(
+                self,
+                "Export Successful",
+                f"MA3 DMX Remotes exported successfully to:\n{file_path}"
+            )
+            self.status_label.setText(f"Exported MA3 DMX Remotes to {Path(file_path).name}")
+            
         except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"Export failed: {str(e)}")
+            QMessageBox.critical(
+                self,
+                "Export Error",
+                f"Failed to export MA3 DMX Remotes:\n{str(e)}"
+            )
+    
+    def _export_ma3_sequences(self):
+        """Export master fixtures as MA3 sequences XML."""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        # Get master fixtures only using centralized access method
+        master_fixtures = self.get_master_fixtures()
+        
+        if not master_fixtures:
+            QMessageBox.warning(self, "No Master Fixtures", "No master fixtures found to export.")
+            return
+        
+        # Get save file path from user
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export MA3 Sequences",
+            str(Path.home() / "ma3_sequences.xml"),
+            "MA3 XML Files (*.xml)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            # Export using the core exporter
+            from core.exporter import export_to_ma3_sequences
+            
+            # Generate the XML - pass fixtures directly
+            xml_content = export_to_ma3_sequences(master_fixtures)
+            
+            # Save to file
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(xml_content)
+            
+            # Count sequences generated
+            sequence_count = 0
+            for fixture in master_fixtures:
+                if fixture.get('matched', False):
+                    sequence_count += len(fixture.get('sequences', {}))
+            
+            QMessageBox.information(
+                self,
+                "Export Successful",
+                f"MA3 Sequences exported successfully to:\n{file_path}\n\n"
+                f"Generated {sequence_count} sequences with values set to 100."
+            )
+            self.status_label.setText(f"Exported MA3 Sequences to {Path(file_path).name}")
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Error",
+                f"Failed to export MA3 Sequences:\n{str(e)}"
+            )
     
     def _update_ui_state(self):
         """Update UI state based on current data."""
         has_fixtures = len(self.project_state['fixtures']) > 0
-        has_selected_fixtures = any(f.get('selected') for f in self.project_state['fixtures'])
-        has_selected_attributes = len(self.project_state['selected_attributes']) > 0
+        has_selected_attributes = len(self.config.get_selected_attributes()) > 0
+        
+        # Get master and remote fixtures using centralized access methods
+        master_fixtures = self.get_master_fixtures()
+        remote_fixtures = self.get_remote_fixtures()
         
         # Enable/disable buttons
-        # self.select_all_fixtures_button.setEnabled(has_fixtures)
-        # self.select_none_fixtures_button.setEnabled(has_fixtures)
         self.clear_fixtures_button.setEnabled(has_fixtures)
-        self.link_fixtures_button.setEnabled(has_fixtures)
-        
-        self.select_all_attrs_button.setEnabled(has_fixtures)
-        self.select_none_attrs_button.setEnabled(has_fixtures)
-        
-        self.preview_button.setEnabled(has_selected_fixtures and has_selected_attributes)
-        self.export_button.setEnabled(has_selected_fixtures and has_selected_attributes)
+        self.apply_sequences_button.setEnabled(len(master_fixtures) > 0 and len(remote_fixtures) > 0)
+        self.renumber_sequences_button.setEnabled(len(master_fixtures) > 0)
+        self.export_ma3_remotes_button.setEnabled(len(remote_fixtures) > 0)
+        self.export_ma3_sequences_button.setEnabled(len(master_fixtures) > 0)
     
     def _show_about(self):
         """Show about dialog."""
@@ -679,6 +695,187 @@ class MainWindow(QMainWindow):
             "lighting fixture addresses and generate DMX documentation.\n\n"
             "Completely rewritten for simplicity and maintainability."
         )
+
+    def _save_project(self):
+        """Save the current project."""
+        # If we have a current project path, save there, otherwise do Save As
+        if hasattr(self, 'current_project_path') and self.current_project_path:
+            success = project_manager.save_project(self.current_project_path, self.project_state, self.config)
+            if success:
+                self.status_label.setText(f"Project saved to {self.current_project_path.name}")
+            else:
+                QMessageBox.critical(self, "Save Error", "Failed to save project. Please check the console for details.")
+        else:
+            self._save_project_as()
+    
+    def _save_project_as(self):
+        """Save the current project with a new name."""
+        from PyQt6.QtWidgets import QFileDialog, QInputDialog
+        
+        # Get project name from user
+        project_name, ok = QInputDialog.getText(
+            self,
+            "Save Project As",
+            "Enter project name:",
+            text="MyProject"
+        )
+        
+        if not ok or not project_name.strip():
+            return
+        
+        # Clean the project name (remove invalid characters)
+        project_name = "".join(c for c in project_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        if not project_name:
+            QMessageBox.warning(self, "Invalid Name", "Please enter a valid project name.")
+            return
+        
+        # Get save file path from user
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Project As",
+            str(Path.home() / f"{project_name}.aa"),
+            "AttributeAddresser Projects (*.aa)"
+        )
+        
+        if not file_path:
+            return
+        
+        project_path = Path(file_path)
+        
+        # Check if project already exists
+        if project_path.exists():
+            reply = QMessageBox.question(
+                self,
+                "Project Exists",
+                f"Project '{project_name}' already exists. Do you want to overwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        
+        # Save the project
+        success = project_manager.save_project(project_path, self.project_state, self.config)
+        
+        if success:
+            # Store the current project path
+            self.current_project_path = project_path
+            QMessageBox.information(
+                self,
+                "Project Saved",
+                f"Project '{project_name}' saved successfully to:\n{project_path}"
+            )
+            self.status_label.setText(f"Project saved: {project_name}")
+        else:
+            QMessageBox.critical(
+                self,
+                "Save Error",
+                "Failed to save project. Please check the console for details."
+            )
+    
+    def _load_project(self):
+        """Load a project."""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        # Get load file path from user - look for .aa files
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Project",
+            str(Path.home()),
+            "AttributeAddresser Projects (*.aa)"
+        )
+        
+        if not file_path:
+            return
+        
+        project_path = Path(file_path)
+        
+        # Check if this is a valid project
+        project_info = project_manager.get_project_info(project_path)
+        if not project_info:
+            QMessageBox.warning(
+                self,
+                "Invalid Project",
+                "The selected file is not a valid AttributeAddresser project.\n\n"
+                "Please select a .aa file created by this application."
+            )
+            return
+        
+        # Confirm loading (in case user has unsaved changes)
+        reply = QMessageBox.question(
+            self,
+            "Load Project",
+            f"Load project '{project_info['name']}'?\n"
+            f"This will replace the current project data.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        # Load the project
+        app_state, config_data = project_manager.load_project(project_path)
+        
+        if app_state is not None:
+            # Restore application state
+            self.project_state = app_state
+            
+            # Store the current project path
+            self.current_project_path = project_path
+            
+            # Restore configuration if needed
+            if config_data:
+                self._restore_config(config_data)
+            
+            # Update UI
+            self._update_fixtures_tables()
+            self._update_status_info()
+            self._update_ui_state()
+            
+            QMessageBox.information(
+                self,
+                "Project Loaded",
+                f"Project '{project_info['name']}' loaded successfully.\n"
+                f"Fixtures: {project_info['fixture_count']}"
+            )
+            self.status_label.setText(f"Project loaded: {project_info['name']}")
+        else:
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                "Failed to load project. Please check the console for details."
+            )
+    
+    def _restore_config(self, config_data: Dict[str, Any]):
+        """Restore configuration from saved data."""
+        # This would restore configuration settings
+        # For now, just print what we have
+        print(f"Config data to restore: {config_data}")
+        # TODO: Implement config restoration based on your config structure
+    
+    # Centralized data access methods for single source of truth
+    def get_master_fixtures(self) -> List[Dict[str, Any]]:
+        """Get all master fixtures from the project state."""
+        return core.get_master_fixtures(self.project_state['fixtures'])
+    
+    def get_remote_fixtures(self) -> List[Dict[str, Any]]:
+        """Get all remote fixtures from the project state."""
+        return core.get_remote_fixtures(self.project_state['fixtures'])
+    
+    def get_master_fixtures_matched(self) -> List[Dict[str, Any]]:
+        """Get all matched master fixtures from the project state."""
+        return core.get_master_fixtures_matched(self.project_state['fixtures'])
+    
+    def get_remote_fixtures_matched(self) -> List[Dict[str, Any]]:
+        """Get all matched remote fixtures from the project state."""
+        return core.get_remote_fixtures_matched(self.project_state['fixtures'])
+    
+    def get_fixture_statistics(self) -> Dict[str, Any]:
+        """Get comprehensive fixture statistics."""
+        return core.validate_fixture_roles(self.project_state['fixtures'])
+    
+    def validate_fixture_data(self) -> bool:
+        """Validate that all fixtures have consistent data."""
+        return core.ensure_fixture_role_consistency(self.project_state['fixtures'])
 
 
 def main():

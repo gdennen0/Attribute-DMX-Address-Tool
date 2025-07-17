@@ -46,12 +46,13 @@ class Config:
                 "out_to": 100.0,
                 "resolution": "16bit"
             },
-            "available_attributes": [
-                "Dim", "R", "G", "B", "W", "WW", "CW", "A", "UV", "Lime", "Cyan", "Magenta", "Yellow",
-                "Pan", "Tilt", "Zoom", "Focus", "Iris", "Gobo1", "Gobo2", "Color1", "Color2", 
-                "Prism", "Frost", "Shutter", "Strobe"
-            ],
-            "sequence_start_number": 1001
+            "sequence_start_number": 1001,
+            "renumber_sequences_config": {
+                "start_number": 1001,
+                "interval": 1,
+                "add_breaks": False,
+                "break_sequences": 5
+            }
         }
     
     def save_config(self):
@@ -170,14 +171,6 @@ class Config:
         self.config["ma3_xml_config"] = ma3_config
         self.save_config()
     
-    def get_available_attributes(self) -> List[str]:
-        """Get list of available attributes for quick selection."""
-        return self.config.get("available_attributes", [
-            "Dim", "R", "G", "B", "W", "WW", "CW", "A", "UV", "Lime", "Cyan", "Magenta", "Yellow",
-            "Pan", "Tilt", "Zoom", "Focus", "Iris", "Gobo1", "Gobo2", "Color1", "Color2", 
-            "Prism", "Frost", "Shutter", "Strobe"
-        ])
-
     def get_sequence_start_number(self) -> int:
         """Get the starting number for sequence numbering."""
         return self.config.get("sequence_start_number", 1)
@@ -185,4 +178,28 @@ class Config:
     def set_sequence_start_number(self, start_number: int):
         """Set the starting number for sequence numbering and save config."""
         self.config["sequence_start_number"] = start_number
+        self.save_config()
+    
+    def get_fixture_type_matches(self) -> Dict[str, Dict[str, str]]:
+        """Get saved fixture type matches (profile and mode mappings)."""
+        return self.config.get("fixture_type_matches", {})
+    
+    def set_fixture_type_matches(self, fixture_type_matches: Dict[str, Dict[str, str]]):
+        """Set fixture type matches and save config."""
+        self.config["fixture_type_matches"] = fixture_type_matches
+        self.save_config()
+    
+    def get_renumber_sequences_config(self) -> dict:
+        """Get renumber sequences configuration."""
+        default_config = {
+            "start_number": 1001,
+            "interval": 1,
+            "add_breaks": False,
+            "break_sequences": 5
+        }
+        return self.config.get("renumber_sequences_config", default_config)
+    
+    def set_renumber_sequences_config(self, renumber_config: dict):
+        """Set renumber sequences configuration and save config."""
+        self.config["renumber_sequences_config"] = renumber_config
         self.save_config() 

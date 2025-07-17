@@ -15,6 +15,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 
 import core
 from .gdtf_dialog import GDTFMatchingDialog
+from .attribute_selection_dialog import AttributeSelectionDialog
 
 
 class CSVImportDialog(QDialog):
@@ -125,12 +126,13 @@ class CSVImportDialog(QDialog):
         
         # Column mapping controls
         self.mapping_combos = {}
-        required_fields = ['name', 'type', 'mode', 'address', 'fixture_id']
+        required_fields = ['name', 'type', 'mode', 'universe', 'address', 'fixture_id']
         field_labels = {
             'name': 'Fixture Name:',
             'type': 'Fixture Type:',
             'mode': 'DMX Mode:',
-            'address': 'Base Address:',
+            'universe': 'Universe:',
+            'address': 'Address:',
             'fixture_id': 'Fixture ID:'
         }
         
@@ -143,18 +145,20 @@ class CSVImportDialog(QDialog):
             self.mapping_combos[field] = combo
             mapping_layout.addWidget(label, i, 0)
             mapping_layout.addWidget(combo, i, 1)
-        
-        # Fixture ID start number
-        mapping_layout.addWidget(QLabel("Start Fixture ID:"), len(required_fields), 0)
-        self.start_id_spin = QSpinBox()
-        self.start_id_spin.setRange(1, 9999)
-        self.start_id_spin.setValue(1)
-        mapping_layout.addWidget(self.start_id_spin, len(required_fields), 1)
     
     def _setup_table(self):
         """Set up the data table."""
         self.data_table.setAlternatingRowColors(True)
         self.data_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        
+        # Set table properties for better display
+        self.data_table.setShowGrid(True)
+        self.data_table.setGridStyle(Qt.PenStyle.SolidLine)
+        
+        # Set header properties
+        header = self.data_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft)
     
     def _browse_file(self):
         """Browse for CSV file."""
@@ -240,20 +244,35 @@ class CSVImportDialog(QDialog):
                     item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                     self.data_table.setItem(row_idx, col_idx, item)
         
-        # Resize columns
-        self.data_table.resizeColumnsToContents()
+        # Resize columns for CSV preview
+        header = self.data_table.horizontalHeader()
+        # Reset all column resize modes first
+        for i in range(len(headers)):
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
+        
+        # For CSV preview, use ResizeToContents for all columns
+        for i in range(len(headers)):
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        
         self.preview_label.setText(f"CSV Preview (showing first {len(data_rows)} rows):")
     
     def _update_parse_button(self):
         """Update parse button state."""
         # Check if required mappings are set
-        required_fields = ['name', 'type', 'address']
+        required_fields = ['name', 'type']
         has_required = all(
             self.mapping_combos[field].currentData() 
             for field in required_fields
         )
         
-        self.parse_button.setEnabled(has_required and hasattr(self, 'csv_file_path'))
+        # Check if we have either universe+address or just address
+        has_universe = bool(self.mapping_combos['universe'].currentData())
+        has_address = bool(self.mapping_combos['address'].currentData())
+        
+        # Need either both universe and address, or just address
+        has_addressing = (has_universe and has_address) or has_address
+        
+        self.parse_button.setEnabled(has_required and has_addressing and hasattr(self, 'csv_file_path'))
     
     def _parse_csv(self):
         """Parse CSV file with current column mapping."""
@@ -272,11 +291,11 @@ class CSVImportDialog(QDialog):
                 if mapped_column:
                     self.column_mapping[field] = mapped_column
             
-            # Parse CSV
-            result = core.parse_csv_file(
+            # Parse CSV with fixture ID validation
+            result = core.parse_csv_file_with_fixture_id_validation(
                 self.csv_file_path, 
                 self.column_mapping,
-                self.start_id_spin.value()
+                1  # Start with ID 1
             )
             
             if 'error' in result:
@@ -284,6 +303,11 @@ class CSVImportDialog(QDialog):
                 return
             
             self.fixtures = result['fixtures']
+            
+            # Check for invalid fixture IDs and prompt user
+            invalid_fixtures = [f for f in self.fixtures if f.get('fixture_id_invalid', False)]
+            if invalid_fixtures:
+                self._handle_invalid_fixture_ids(invalid_fixtures)
             
             # Load external GDTF profiles for matching
             external_folder = self.config.get_external_gdtf_folder()
@@ -321,7 +345,7 @@ class CSVImportDialog(QDialog):
     
     def _show_fixtures_table(self):
         """Show parsed fixtures in table with checkboxes."""
-        headers = ["Select", "Name", "Type", "Mode", "Address", "ID", "Role", "Status"]
+        headers = ["Select", "Name", "Type", "Mode", "Universe", "Channel", "ID", "Role", "Status"]
         self.data_table.setColumnCount(len(headers))
         self.data_table.setHorizontalHeaderLabels(headers)
         self.data_table.setRowCount(len(self.fixtures))
@@ -331,25 +355,33 @@ class CSVImportDialog(QDialog):
             checkbox = QCheckBox()
             checkbox.setChecked(fixture.get('selected', True))
             checkbox.stateChanged.connect(lambda state, r=row: self._checkbox_changed(r, state))
+            
+            # Center the checkbox in the cell
+            checkbox.setStyleSheet("QCheckBox { margin: auto; }")
             self.data_table.setCellWidget(row, 0, checkbox)
             
             # Fixture data
             self.data_table.setItem(row, 1, QTableWidgetItem(fixture.get('name', '')))
             self.data_table.setItem(row, 2, QTableWidgetItem(fixture.get('type', '')))
             self.data_table.setItem(row, 3, QTableWidgetItem(fixture.get('mode', '')))
-            self.data_table.setItem(row, 4, QTableWidgetItem(str(fixture.get('base_address', 1))))
-            self.data_table.setItem(row, 5, QTableWidgetItem(str(fixture.get('fixture_id', 0))))
+            # Show universe and channel values
+            csv_universe = fixture.get('csv_universe', 1)
+            csv_channel = fixture.get('csv_channel', fixture.get('base_address', 1))
+            self.data_table.setItem(row, 4, QTableWidgetItem(str(csv_universe)))
+            self.data_table.setItem(row, 5, QTableWidgetItem(str(csv_channel)))
+            self.data_table.setItem(row, 6, QTableWidgetItem(str(fixture.get('fixture_id', 0))))
             
             # Role
             role = core.get_fixture_role(fixture)
-            role_item = QTableWidgetItem(role.title())
-            if role == 'unassigned':
+            role_display = "NONE" if role == "none" else role.title()
+            role_item = QTableWidgetItem(role_display)
+            if role == 'none':
                 role_item.setBackground(Qt.GlobalColor.yellow)
             elif role == 'master':
                 role_item.setBackground(Qt.GlobalColor.green)
             elif role == 'remote':
                 role_item.setBackground(Qt.GlobalColor.cyan)
-            self.data_table.setItem(row, 6, role_item)
+            self.data_table.setItem(row, 7, role_item)
             
             # Status
             status = "Matched" if fixture.get('matched') else "Unmatched"
@@ -358,19 +390,76 @@ class CSVImportDialog(QDialog):
                 status_item.setBackground(Qt.GlobalColor.green)
             else:
                 status_item.setBackground(Qt.GlobalColor.lightGray)
-            self.data_table.setItem(row, 7, status_item)
+            self.data_table.setItem(row, 8, status_item)
         
         # Resize columns
         header = self.data_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        for i in range(3, len(headers)):
-            header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
-        self.data_table.setColumnWidth(0, 60)
+        # Reset all column resize modes first
+        for i in range(len(headers)):
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
+        
+        # Set specific resize modes
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # Select checkbox
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Name
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # Type
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Mode
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Universe
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Channel
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # ID
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # Role
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # Status
+        
+        # Set checkbox column width with some padding
+        self.data_table.setColumnWidth(0, 80)
+        
+        # Center the "Select" header text
+        header_item = self.data_table.horizontalHeaderItem(0)
+        if header_item:
+            header_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         
         self.preview_label.setText("Parsed Fixtures:")
         self._update_import_button()
+    
+    def _handle_invalid_fixture_ids(self, invalid_fixtures: List[Dict[str, Any]]):
+        """Handle fixtures with invalid fixture IDs by prompting user for manual entry."""
+        from PyQt6.QtWidgets import QInputDialog
+        
+        # Show warning about invalid fixture IDs
+        fixture_names = [f.get('name', 'Unknown') for f in invalid_fixtures]
+        warning_msg = f"The following fixtures have invalid fixture IDs:\n\n"
+        warning_msg += "\n".join(f"• {name}" for name in fixture_names[:10])  # Show first 10
+        if len(fixture_names) > 10:
+            warning_msg += f"\n... and {len(fixture_names) - 10} more"
+        warning_msg += "\n\nYou will be prompted to enter valid fixture IDs for each one."
+        
+        QMessageBox.information(self, "Invalid Fixture IDs", warning_msg)
+        
+        # Prompt for each invalid fixture
+        for fixture in invalid_fixtures:
+            original_id = fixture.get('original_fixture_id', '')
+            fixture_name = fixture.get('name', 'Unknown')
+            
+            # Show input dialog
+            new_id, ok = QInputDialog.getInt(
+                self,
+                "Enter Fixture ID",
+                f"Enter a valid fixture ID for '{fixture_name}'\n(Original value: {original_id})",
+                value=fixture.get('fixture_id', 1),
+                min=1,
+                max=9999
+            )
+            
+            if ok:
+                # Update the fixture ID
+                fixture['fixture_id'] = new_id
+                fixture['fixture_id_invalid'] = False
+                if 'original_fixture_id' in fixture:
+                    del fixture['original_fixture_id']
+            else:
+                # User cancelled - keep the sequential ID
+                fixture['fixture_id_invalid'] = False
+                if 'original_fixture_id' in fixture:
+                    del fixture['original_fixture_id']
     
     def _checkbox_changed(self, row: int, state: int):
         """Handle checkbox state change."""
@@ -477,7 +566,38 @@ class CSVImportDialog(QDialog):
                 core.set_fixture_selected(self.fixtures[row], False)
         
         if selected_fixtures:
+            # Check if any fixtures have 'none' role and show warning
+            fixtures_with_none_role = [f for f in selected_fixtures if core.get_fixture_role(f) == 'none']
+            if fixtures_with_none_role:
+                fixture_names = [f.get('name', 'Unknown') for f in fixtures_with_none_role]
+                warning_msg = f"The following fixtures have NONE role and will be imported but may not appear in the main window tables:\n\n"
+                warning_msg += "\n".join(f"• {name}" for name in fixture_names[:10])  # Show first 10
+                if len(fixture_names) > 10:
+                    warning_msg += f"\n... and {len(fixture_names) - 10} more"
+                warning_msg += "\n\nYou can assign roles during import using the role assignment buttons."
+                QMessageBox.information(self, "Role Assignment Notice", warning_msg)
+            
+            # Show attribute selection dialog after import
+            self.show_attribute_selection_dialog(selected_fixtures)
+        else:
+            QMessageBox.information(self, "No Selection", "Please select at least one fixture to import.")
+    
+    def show_attribute_selection_dialog(self, selected_fixtures: List[Dict[str, Any]]):
+        """Show the attribute selection dialog after successful import."""
+        dialog = AttributeSelectionDialog(selected_fixtures, self.config, self)
+        dialog.attributes_selected.connect(self.on_attributes_selected)
+        result = dialog.exec()
+        
+        if result == QDialog.DialogCode.Accepted:
+            # The dialog has already emitted the attributes_selected signal
+            # and applied the fixture matches, so we can proceed with import
             self.fixtures_imported.emit(selected_fixtures)
             self.accept()
         else:
-            QMessageBox.information(self, "No Selection", "Please select at least one fixture to import.") 
+            # User cancelled the attribute selection, so we don't import
+            pass
+    
+    def on_attributes_selected(self, selected_attributes: List[str]):
+        """Handle attributes selected from the attribute selection dialog."""
+        # Save selected attributes to config
+        self.config.set_selected_attributes(selected_attributes) 

@@ -44,6 +44,40 @@ def parse_csv_file(csv_path: str, column_mapping: Dict[str, str],
         return {'error': f'Failed to parse CSV file: {str(e)}'}
 
 
+def parse_csv_file_with_fixture_id_validation(csv_path: str, column_mapping: Dict[str, str], 
+                                             start_fixture_id: int = 1) -> Dict[str, Any]:
+    """Parse CSV file and extract fixture data with fixture ID validation."""
+    try:
+        with open(csv_path, 'r', newline='', encoding='utf-8') as file:
+            # Detect CSV dialect
+            sample = file.read(1024)
+            file.seek(0)
+            sniffer = csv.Sniffer()
+            dialect = sniffer.sniff(sample)
+            
+            # Read CSV data
+            reader = csv.DictReader(file, dialect=dialect)
+            rows = list(reader)
+            
+            if not rows:
+                return {'error': 'CSV file is empty'}
+            
+            # Get available columns
+            available_columns = list(rows[0].keys())
+            
+            # Convert rows to fixtures with validation
+            fixtures = _convert_rows_to_fixtures_with_validation(rows, column_mapping, start_fixture_id)
+            
+            return {
+                'fixtures': fixtures,
+                'available_columns': available_columns,
+                'success': True
+            }
+            
+    except Exception as e:
+        return {'error': f'Failed to parse CSV file: {str(e)}'}
+
+
 def _convert_rows_to_fixtures(rows: List[Dict[str, str]], 
                              column_mapping: Dict[str, str],
                              start_fixture_id: int) -> List[Dict[str, Any]]:
@@ -57,11 +91,46 @@ def _convert_rows_to_fixtures(rows: List[Dict[str, str]],
         fixture_type = row.get(column_mapping.get('type', ''), 'Unknown')
         mode = row.get(column_mapping.get('mode', ''), 'Default')
         
-        # Parse base address
-        address_str = row.get(column_mapping.get('address', ''), '1')
-        try:
-            base_address = int(address_str)
-        except ValueError:
+        # Parse universe and address from CSV
+        csv_universe = None
+        csv_channel = None
+        base_address = 1
+        
+        universe_str = row.get(column_mapping.get('universe', ''), '')
+        address_str = row.get(column_mapping.get('address', ''), '')
+        
+        if universe_str and address_str:
+            # We have both universe and address from CSV
+            try:
+                csv_universe = int(universe_str)
+                csv_channel = int(address_str)
+                if csv_universe >= 1 and csv_channel >= 1 and csv_channel <= 512:
+                    base_address = (csv_universe - 1) * 512 + csv_channel
+                else:
+                    csv_universe = 1
+                    csv_channel = 1
+                    base_address = 1
+            except ValueError:
+                csv_universe = 1
+                csv_channel = 1
+                base_address = 1
+        elif address_str:
+            # We have only address - assume it's the channel value (universe 1)
+            try:
+                csv_channel = int(address_str)
+                if csv_channel < 1 or csv_channel > 512:
+                    csv_channel = 1
+                csv_universe = 1
+                # Calculate absolute address: (universe - 1) * 512 + channel
+                base_address = csv_channel  # Universe 1, so (1-1) * 512 + channel = channel
+            except ValueError:
+                csv_universe = 1
+                csv_channel = 1
+                base_address = 1
+        else:
+            # No address information provided
+            csv_universe = 1
+            csv_channel = 1
             base_address = 1
         
         # Parse fixture ID if provided
@@ -78,6 +147,103 @@ def _convert_rows_to_fixtures(rows: List[Dict[str, str]],
             base_address=base_address,
             fixture_id=parsed_id
         )
+        
+        # Store the CSV universe and channel values for reference
+        fixture['csv_universe'] = csv_universe
+        fixture['csv_channel'] = csv_channel
+        
+        fixtures.append(fixture)
+        fixture_id += 1
+    
+    return fixtures
+
+
+def _convert_rows_to_fixtures_with_validation(rows: List[Dict[str, str]], 
+                                             column_mapping: Dict[str, str],
+                                             start_fixture_id: int) -> List[Dict[str, Any]]:
+    """Convert CSV rows to fixture dictionaries with fixture ID validation."""
+    fixtures = []
+    fixture_id = start_fixture_id
+    
+    for row in rows:
+        # Extract mapped values
+        name = row.get(column_mapping.get('name', ''), f'Fixture_{fixture_id}')
+        fixture_type = row.get(column_mapping.get('type', ''), 'Unknown')
+        mode = row.get(column_mapping.get('mode', ''), 'Default')
+        
+        # Parse universe and address from CSV
+        csv_universe = None
+        csv_channel = None
+        base_address = 1
+        
+        universe_str = row.get(column_mapping.get('universe', ''), '')
+        address_str = row.get(column_mapping.get('address', ''), '')
+        
+        if universe_str and address_str:
+            # We have both universe and address from CSV
+            try:
+                csv_universe = int(universe_str)
+                csv_channel = int(address_str)
+                if csv_universe >= 1 and csv_channel >= 1 and csv_channel <= 512:
+                    base_address = (csv_universe - 1) * 512 + csv_channel
+                else:
+                    csv_universe = 1
+                    csv_channel = 1
+                    base_address = 1
+            except ValueError:
+                csv_universe = 1
+                csv_channel = 1
+                base_address = 1
+        elif address_str:
+            # We have only address - assume it's the channel value (universe 1)
+            try:
+                csv_channel = int(address_str)
+                if csv_channel < 1 or csv_channel > 512:
+                    csv_channel = 1
+                csv_universe = 1
+                # Calculate absolute address: (universe - 1) * 512 + channel
+                base_address = csv_channel  # Universe 1, so (1-1) * 512 + channel = channel
+            except ValueError:
+                csv_universe = 1
+                csv_channel = 1
+                base_address = 1
+        else:
+            # No address information provided
+            csv_universe = 1
+            csv_channel = 1
+            base_address = 1
+        
+        # Parse fixture ID with validation
+        id_str = row.get(column_mapping.get('fixture_id', ''), '')
+        parsed_id = None
+        
+        if id_str:
+            try:
+                parsed_id = int(id_str)
+            except ValueError:
+                # Invalid fixture ID - will be handled by the dialog
+                parsed_id = None
+        
+        if parsed_id is None:
+            # Use sequential ID as fallback
+            parsed_id = fixture_id
+        
+        fixture = create_fixture(
+            name=name,
+            fixture_type=fixture_type,
+            mode=mode,
+            base_address=base_address,
+            fixture_id=parsed_id
+        )
+        
+        # Store the CSV universe and channel values for reference
+        fixture['csv_universe'] = csv_universe
+        fixture['csv_channel'] = csv_channel
+        
+        # Mark if fixture ID was invalid
+        if id_str and parsed_id == fixture_id:
+            fixture['fixture_id_invalid'] = True
+            fixture['original_fixture_id'] = id_str
         
         fixtures.append(fixture)
         fixture_id += 1
@@ -127,15 +293,17 @@ def create_column_mapping(headers: List[str]) -> Dict[str, str]:
         'type': '',
         'mode': '',
         'address': '',
+        'universe': '',
         'fixture_id': ''
     }
     
     # Common header patterns
-    name_patterns = ['name', 'fixture', 'label', 'unit']
+    name_patterns = ['name', 'fixture', 'label', 'unit', 'description']
     type_patterns = ['type', 'model', 'gdtf', 'fixture_type', 'fixtureType']
     mode_patterns = ['mode', 'dmx_mode', 'profile']
-    address_patterns = ['address', 'dmx', 'channel', 'start_address', 'base_address']
-    id_patterns = ['id', 'fixture_id', 'number', 'unit_number']
+    address_patterns = ['address', 'dmx', 'channel', 'start_address', 'base_address', 'dmx_address']
+    universe_patterns = ['universe', 'dmx_universe', 'univ']
+    id_patterns = ['id', 'fixture_id', 'number', 'unit_number', 'desk chan']
     
     # Try to match headers to patterns
     for header in headers:
@@ -149,6 +317,8 @@ def create_column_mapping(headers: List[str]) -> Dict[str, str]:
             mapping['mode'] = header
         elif not mapping['address'] and any(pattern in header_lower for pattern in address_patterns):
             mapping['address'] = header
+        elif not mapping['universe'] and any(pattern in header_lower for pattern in universe_patterns):
+            mapping['universe'] = header
         elif not mapping['fixture_id'] and any(pattern in header_lower for pattern in id_patterns):
             mapping['fixture_id'] = header
     
