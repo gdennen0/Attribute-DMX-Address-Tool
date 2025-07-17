@@ -11,7 +11,7 @@ AttributeAddresser is a Python application that helps lighting professionals ana
 - **MVR File Import**: Import and parse MA3 show files (.mvr)
 - **CSV File Import**: Import fixture data from CSV files with column mapping
 - **GDTF Profile Matching**: Match fixture types to GDTF profiles for accurate attribute mapping
-- **Fixture Management**: Organize fixtures into Master and Remote groups
+- **Fixture Management**: Organize fixtures into Ma and Remote groups
 - **Sequence Management**: Apply and renumber sequence numbers
 - **Export Options**: Export to MA3 sequences, CSV, and other formats
 - **Project Saving**: Save and load project files for later use
@@ -46,7 +46,7 @@ python main.py
 
 1. **Import Data**: Use "Import MVR..." or "Import CSV..." to load fixture data
 2. **Configure Fixtures**: Match fixture types to GDTF profiles and select attributes
-3. **Organize Fixtures**: Arrange fixtures into Master and Remote groups as needed
+3. **Organize Fixtures**: Arrange fixtures into Ma and Remote groups as needed
 4. **Apply Sequences**: Use "Apply sequence numbers" to assign sequence numbers
 5. **Export Results**: Export data in your preferred format
 6. **Save Project**: Save your work for later use

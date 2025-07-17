@@ -251,8 +251,13 @@ def _convert_rows_to_fixtures_with_validation(rows: List[Dict[str, str]],
     return fixtures
 
 
-def get_csv_preview(csv_path: str, max_rows: int = 10) -> Dict[str, Any]:
-    """Get a preview of CSV file contents."""
+def get_csv_preview(csv_path: str, max_rows: int = None) -> Dict[str, Any]:
+    """Get a preview of CSV file contents.
+    
+    Args:
+        csv_path: Path to the CSV file
+        max_rows: Maximum number of rows to preview. If None, previews all rows up to 10000.
+    """
     try:
         with open(csv_path, 'r', newline='', encoding='utf-8') as file:
             # Detect CSV dialect
@@ -264,6 +269,11 @@ def get_csv_preview(csv_path: str, max_rows: int = 10) -> Dict[str, Any]:
             # Read preview rows
             reader = csv.reader(file, dialect=dialect)
             rows = []
+            
+            # If max_rows is None, read all rows up to a safety limit
+            if max_rows is None:
+                max_rows = 10000  # Safety limit for extremely large files
+            
             for i, row in enumerate(reader):
                 if i >= max_rows:
                     break
@@ -276,10 +286,15 @@ def get_csv_preview(csv_path: str, max_rows: int = 10) -> Dict[str, Any]:
             headers = rows[0] if rows else []
             data_rows = rows[1:] if len(rows) > 1 else []
             
+            # Check if we hit the safety limit
+            hit_limit = len(rows) >= max_rows
+            
             return {
                 'headers': headers,
                 'data_rows': data_rows,
-                'success': True
+                'success': True,
+                'total_rows_previewed': len(rows),
+                'hit_limit': hit_limit
             }
             
     except Exception as e:

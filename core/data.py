@@ -67,7 +67,7 @@ def create_fixture(name: str, fixture_type: str, mode: str, base_address: int,
         'universes': {},   # {attribute_name: universe_number}
         'channels': {},    # {attribute_name: channel_number}
         'sequences': {},   # {attribute_name: sequence_number}
-        'fixture_role': 'none',  # 'master', 'remote', or 'none'
+        'fixture_role': 'none',  # 'ma', 'remote', or 'none'
         'linked_fixtures': [],  # List of fixture IDs linked to this fixture
         **kwargs
     }
@@ -108,8 +108,8 @@ def is_fixture_selected(fixture: Dict[str, Any]) -> bool:
 
 
 def set_fixture_role(fixture: Dict[str, Any], role: str):
-    """Set fixture role (master or remote)."""
-    if role in ['master', 'remote']:
+    """Set fixture role (ma or remote)."""
+    if role in ['ma', 'remote']:
         fixture['fixture_role'] = role
         fixture['linked_fixtures'] = []
 
@@ -119,9 +119,9 @@ def get_fixture_role(fixture: Dict[str, Any]) -> str:
     return fixture.get('fixture_role', 'none')
 
 
-def get_master_fixtures(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Get all master fixtures."""
-    return [f for f in fixtures if get_fixture_role(f) == 'master']
+def get_ma_fixtures(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Get all ma fixtures."""
+    return [f for f in fixtures if get_fixture_role(f) == 'ma']
 
 
 def get_remote_fixtures(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -129,9 +129,9 @@ def get_remote_fixtures(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [f for f in fixtures if get_fixture_role(f) == 'remote']
 
 
-def get_master_fixtures_matched(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Get all matched master fixtures."""
-    return [f for f in fixtures if get_fixture_role(f) == 'master' and f.get('matched', False)]
+def get_ma_fixtures_matched(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Get all matched ma fixtures."""
+    return [f for f in fixtures if get_fixture_role(f) == 'ma' and f.get('matched', False)]
 
 
 def get_remote_fixtures_matched(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -140,32 +140,32 @@ def get_remote_fixtures_matched(fixtures: List[Dict[str, Any]]) -> List[Dict[str
 
 
 def get_fixtures_by_role(fixtures: List[Dict[str, Any]], role: str) -> List[Dict[str, Any]]:
-    """Get fixtures by role (master, remote, or none)."""
+    """Get fixtures by role (ma, remote, or none)."""
     return [f for f in fixtures if get_fixture_role(f) == role]
 
 
 def get_fixtures_by_role_matched(fixtures: List[Dict[str, Any]], role: str) -> List[Dict[str, Any]]:
-    """Get matched fixtures by role (master, remote, or none)."""
+    """Get matched fixtures by role (ma, remote, or none)."""
     return [f for f in fixtures if get_fixture_role(f) == role and f.get('matched', False)]
 
 
 def validate_fixture_roles(fixtures: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Validate fixture roles and return summary statistics."""
-    master_count = len(get_master_fixtures(fixtures))
+    ma_count = len(get_ma_fixtures(fixtures))
     remote_count = len(get_remote_fixtures(fixtures))
     none_count = len(get_fixtures_by_role(fixtures, 'none'))
     
-    master_matched = len(get_master_fixtures_matched(fixtures))
+    ma_matched = len(get_ma_fixtures_matched(fixtures))
     remote_matched = len(get_remote_fixtures_matched(fixtures))
     
     return {
         'total_fixtures': len(fixtures),
-        'master_fixtures': master_count,
+        'ma_fixtures': ma_count,
         'remote_fixtures': remote_count,
         'unassigned_fixtures': none_count,
-        'master_matched': master_matched,
+        'ma_matched': ma_matched,
         'remote_matched': remote_matched,
-        'master_unmatched': master_count - master_matched,
+        'ma_unmatched': ma_count - ma_matched,
         'remote_unmatched': remote_count - remote_matched
     }
 
@@ -174,7 +174,7 @@ def ensure_fixture_role_consistency(fixtures: List[Dict[str, Any]]) -> bool:
     """Ensure all fixtures have valid roles assigned."""
     for fixture in fixtures:
         role = get_fixture_role(fixture)
-        if role not in ['master', 'remote', 'none']:
+        if role not in ['ma', 'remote', 'none']:
             return False
     return True
 
@@ -195,6 +195,60 @@ def get_fixtures_by_type(fixtures: List[Dict[str, Any]], fixture_type: str) -> L
 def get_fixtures_by_type_and_role(fixtures: List[Dict[str, Any]], fixture_type: str, role: str) -> List[Dict[str, Any]]:
     """Get fixtures of a specific type and role."""
     return [f for f in fixtures if f.get('type') == fixture_type and get_fixture_role(f) == role]
+
+
+def reprocess_matched_fixtures(fixtures: List[Dict[str, Any]]) -> None:
+    """Reprocess matched fixtures to recalculate universe/channel/absolute address data.
+    This is needed after loading fixtures from a saved project."""
+    for fixture in fixtures:
+        if not fixture.get('matched') or not fixture.get('gdtf_profile'):
+            continue
+        
+        # Get the GDTF profile model
+        profile_model = fixture.get('gdtf_profile')
+        if not hasattr(profile_model, 'channels'):
+            continue
+        
+        # Get the mode data from the profile model
+        mode_data = profile_model.channels
+        
+        # Calculate absolute addresses, universes, and channels
+        base = fixture['base_address']
+        fixture['addresses'] = {}
+        fixture['universes'] = {}
+        fixture['channels'] = {}
+        
+        # Preserve original CSV values for display
+        original_csv_universe = fixture.get('csv_universe')
+        original_csv_channel = fixture.get('csv_channel')
+        
+        # Preserve original MA3 values for display
+        original_ma3_universe = fixture.get('ma3_universe')
+        original_ma3_channel = fixture.get('ma3_channel')
+        
+        for attr, offset in mode_data.items():
+            # Calculate absolute DMX address (1-based)
+            # base_address is 1-based, offset is 1-based from GDTF
+            absolute_address = base + (offset - 1)
+            fixture['addresses'][attr] = absolute_address
+            
+            # For CSV fixtures, use the original CSV universe and calculate channel based on offset
+            if original_csv_universe is not None and original_csv_channel is not None:
+                # Use the original CSV universe
+                fixture['universes'][attr] = original_csv_universe
+                # Calculate channel: original channel + offset - 1
+                fixture['channels'][attr] = original_csv_channel + (offset - 1)
+            # For MA3 fixtures, use the original MA3 universe and calculate channel based on offset
+            elif original_ma3_universe is not None and original_ma3_channel is not None:
+                # Use the original MA3 universe
+                fixture['universes'][attr] = original_ma3_universe
+                # Calculate channel: original channel + offset - 1
+                fixture['channels'][attr] = original_ma3_channel + (offset - 1)
+            else:
+                # For other fixtures, calculate universe and channel from absolute address
+                universe, channel = calculate_universe_and_channel(absolute_address)
+                fixture['universes'][attr] = universe
+                fixture['channels'][attr] = channel
 
 
 def calculate_universe_and_channel(absolute_address: int, universe_size: int = 512) -> tuple[int, int]:
@@ -235,6 +289,10 @@ def match_fixture_to_gdtf(fixture: Dict[str, Any], gdtf_profile: Dict[str, Any],
     original_csv_universe = fixture.get('csv_universe')
     original_csv_channel = fixture.get('csv_channel')
     
+    # Preserve original MA3 values for display
+    original_ma3_universe = fixture.get('ma3_universe')
+    original_ma3_channel = fixture.get('ma3_channel')
+    
     for attr, offset in mode_data.items():
         # Calculate absolute DMX address (1-based)
         # base_address is 1-based, offset is 1-based from GDTF
@@ -247,8 +305,14 @@ def match_fixture_to_gdtf(fixture: Dict[str, Any], gdtf_profile: Dict[str, Any],
             fixture['universes'][attr] = original_csv_universe
             # Calculate channel: original channel + offset - 1
             fixture['channels'][attr] = original_csv_channel + (offset - 1)
+        # For MA3 fixtures, use the original MA3 universe and calculate channel based on offset
+        elif original_ma3_universe is not None and original_ma3_channel is not None:
+            # Use the original MA3 universe
+            fixture['universes'][attr] = original_ma3_universe
+            # Calculate channel: original channel + offset - 1
+            fixture['channels'][attr] = original_ma3_channel + (offset - 1)
         else:
-            # For non-CSV fixtures, calculate universe and channel from absolute address
+            # For other fixtures, calculate universe and channel from absolute address
             universe, channel = calculate_universe_and_channel(absolute_address)
             fixture['universes'][attr] = universe
             fixture['channels'][attr] = channel
@@ -289,6 +353,14 @@ def get_export_data(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not fixture.get('matched'):
             continue
         
+        # Get fixture type from GDTF profile or fallback to fixture type
+        fixture_type = '—'
+        profile_model = fixture.get('gdtf_profile')
+        if profile_model and hasattr(profile_model, 'name'):
+            fixture_type = profile_model.name
+        else:
+            fixture_type = fixture.get('type', '—')
+        
         # Get sorted attributes from the fixture's GDTF profile model
         profile_model = fixture.get('gdtf_profile')
         if profile_model:
@@ -307,6 +379,7 @@ def get_export_data(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 item = {
                     'fixture_name': fixture['name'],
                     'fixture_id': fixture['fixture_id'],
+                    'fixture_type': fixture_type,
                     'attribute': attr,
                     'universe': universe,
                     'channel': channel,

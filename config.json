@@ -1,24 +1,42 @@
 {
   "selected_attributes": [
     "B",
+    "CW",
     "G",
     "R",
     "WW",
-    "White"
+    "Amber",
+    "B",
+    "Ctrl1",
+    "Daylight",
+    "Dim",
+    "G",
+    "R",
+    "Tungsten"
   ],
   "output_format": "ma3_sequences",
   "save_results": true,
   "output_directory": "output",
-  "last_mvr_directory": "/Users/gdennen/Desktop",
+  "last_mvr_directory": "/Users/gdennen/Desktop/Apple/MVR/MA",
   "last_export_directory": "/Users/gdennen/Desktop",
-  "last_gdtf_directory": "/Users/gdennen/Downloads/GDTF",
+  "last_gdtf_directory": "/Users/gdennen/Desktop/Apple/GDTF",
   "fixture_type_attributes": {
-    "Generic@LED - RGBWwCw": [
+    "RGBWWCW Tape": [
       "B",
+      "CW",
       "G",
       "R",
-      "WW",
-      "White"
+      "WW"
+    ],
+    "Spectrum OS 2.5": [
+      "Amber",
+      "B",
+      "Ctrl1",
+      "Daylight",
+      "Dim",
+      "G",
+      "R",
+      "Tungsten"
     ]
   },
   "ma3_xml_config": {
@@ -30,23 +48,30 @@
     "out_to": 100.0,
     "resolution": "16bit"
   },
-  "external_gdtf_folder": "/Users/gdennen/Downloads/GDTF",
-  "last_csv_directory": "/Users/gdennen/Desktop",
+  "external_gdtf_folder": "/Users/gdennen/Desktop/Apple/GDTF",
+  "last_csv_directory": "/Users/gdennen/Desktop/Apple/CSV/CU19 Architectural DMX Patch_Griff",
   "fixture_type_matches": {
-    "Generic@LED - RGBWwCw": {
-      "profile": "Generic@RGBWwCw@Version_1",
+    "RGBWWCW Tape": {
+      "profile": "Generic@RGBWwCw@Initial_WIP",
       "mode": "Standard mode"
+    },
+    "Spectrum OS 2.5": {
+      "profile": "LiteGear@SpectrumOS2@initial_build_2",
+      "mode": "Mode 12"
     }
   },
   "renumber_sequences_config": {
-    "start_number": 1001,
+    "start_number": 2001,
     "interval": 1,
     "add_breaks": false,
     "break_sequences": 1
   },
   "sequence_start_number": 1001,
   "recent_projects": [
+    "/Users/gdennen/Desktop/Apple/DMX MAster/Studio1.1.aa",
+    "/Users/gdennen/Desktop/Apple/DMX MAster/Studio1.aa",
     "/Users/gdennen/MyProject.aa"
   ],
-  "last_project_directory": "/Users/gdennen"
+  "last_project_directory": "/Users/gdennen/Desktop/Apple/DMX MAster",
+  "last_ma3_directory": "/Users/gdennen/Desktop/Apple/Patch XML"
 }

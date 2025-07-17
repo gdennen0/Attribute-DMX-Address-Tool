@@ -76,6 +76,17 @@ class FixtureGroupingTable(DraggableTableWidget):
             fixture_id = fixture.get('fixture_id', 0)
             fixture_rows = []
             
+            # Get fixture type from GDTF profile or fallback to fixture type
+            fixture_type = '—'
+            if fixture.get('matched', False):
+                profile_model = fixture.get('gdtf_profile')
+                if profile_model and hasattr(profile_model, 'name'):
+                    fixture_type = profile_model.name
+                else:
+                    fixture_type = fixture.get('type', '—')
+            else:
+                fixture_type = fixture.get('type', '—')
+            
             if fixture.get('matched', False):
                 # Get sorted attributes from the fixture's GDTF profile model
                 profile_model = fixture.get('gdtf_profile')
@@ -100,6 +111,7 @@ class FixtureGroupingTable(DraggableTableWidget):
                         row_data = {
                             'Fixture ID': str(fixture_id),
                             'Fixture Name': fixture.get('name', ''),
+                            'Fixture Type': fixture_type,
                             'Attribute': attr_name,
                             'Sequence': str(sequence_num),
                             'ActivationGroup': str(activation_group),
@@ -121,6 +133,7 @@ class FixtureGroupingTable(DraggableTableWidget):
                 row_data = {
                     'Fixture ID': str(fixture_id),
                     'Fixture Name': fixture.get('name', ''),
+                    'Fixture Type': fixture_type,
                     'Attribute': f'Unmatched ({fixture.get("fixture_role", "none")})',
                     'Sequence': '—',
                     'ActivationGroup': '—',
@@ -147,7 +160,7 @@ class FixtureGroupingTable(DraggableTableWidget):
     
     def _update_table_model(self):
         """Update the table model with current grouped data."""
-        headers = ["Fixture ID", "Fixture Name", "Attribute", "Sequence", 
+        headers = ["Fixture ID", "Fixture Name", "Fixture Type", "Attribute", "Sequence", 
                   "ActivationGroup", "Universe", "Channel", "Absolute", "Routing"]
         
         # Create new model
@@ -161,13 +174,14 @@ class FixtureGroupingTable(DraggableTableWidget):
         header = self.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Fixture ID
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Fixture Name
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Attribute
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Sequence
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # ActivationGroup
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Universe
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # Channel
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # Absolute
-        header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # Routing
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Fixture Type
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Attribute
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Sequence
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # ActivationGroup
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # Universe
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # Channel
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # Absolute
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  # Routing
         
         # Apply visual grouping
         self._apply_visual_grouping()

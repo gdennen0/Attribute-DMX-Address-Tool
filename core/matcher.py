@@ -171,5 +171,5 @@ def process_fixtures_for_export(fixtures: List[Dict[str, Any]],
 
 
 def get_fixture_role(fixture: Dict[str, Any]) -> str:
-    """Get the role of a fixture (master, remote, or none)."""
+    """Get the role of a fixture (ma, remote, or none)."""
     return fixture.get('fixture_role', 'none') 

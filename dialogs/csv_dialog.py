@@ -79,21 +79,21 @@ class CSVImportDialog(QDialog):
         self.select_none_button = QPushButton("Select None")
         self.toggle_selected_button = QPushButton("Toggle Selected")
         self.gdtf_matching_button = QPushButton("GDTF Profile Matching...")
-        self.set_as_master_button = QPushButton("Set Selected as Master")
+        self.set_as_ma_button = QPushButton("Set Selected as Ma")
         self.set_as_remote_button = QPushButton("Set Selected as Remote")
         
         self.select_all_button.clicked.connect(self._select_all)
         self.select_none_button.clicked.connect(self._select_none)
         self.toggle_selected_button.clicked.connect(self._toggle_selected)
         self.gdtf_matching_button.clicked.connect(self._open_gdtf_matching)
-        self.set_as_master_button.clicked.connect(self._set_selected_as_master)
+        self.set_as_ma_button.clicked.connect(self._set_selected_as_ma)
         self.set_as_remote_button.clicked.connect(self._set_selected_as_remote)
         
         self.select_all_button.setEnabled(False)
         self.select_none_button.setEnabled(False)
         self.toggle_selected_button.setEnabled(False)
         self.gdtf_matching_button.setEnabled(False)
-        self.set_as_master_button.setEnabled(False)
+        self.set_as_ma_button.setEnabled(False)
         self.set_as_remote_button.setEnabled(False)
         
         selection_layout.addWidget(self.select_all_button)
@@ -101,7 +101,7 @@ class CSVImportDialog(QDialog):
         selection_layout.addWidget(self.toggle_selected_button)
         selection_layout.addWidget(self.gdtf_matching_button)
         selection_layout.addStretch()
-        selection_layout.addWidget(self.set_as_master_button)
+        selection_layout.addWidget(self.set_as_ma_button)
         selection_layout.addWidget(self.set_as_remote_button)
         layout.addLayout(selection_layout)
         
@@ -184,8 +184,8 @@ class CSVImportDialog(QDialog):
         self.csv_file_path = file_path
         
         try:
-            # Get CSV preview
-            self.csv_data = core.get_csv_preview(file_path, max_rows=20)
+            # Get CSV preview - no row limit
+            self.csv_data = core.get_csv_preview(file_path, max_rows=None)
             
             if 'error' in self.csv_data:
                 QMessageBox.warning(self, "Error", self.csv_data['error'])
@@ -196,6 +196,16 @@ class CSVImportDialog(QDialog):
             
             # Show preview
             self._show_csv_preview()
+            
+            # Add status message about the preview
+            total_rows = self.csv_data.get('total_rows_previewed', 0)
+            data_row_count = len(self.csv_data.get('data_rows', []))
+            hit_limit = self.csv_data.get('hit_limit', False)
+            
+            if hit_limit:
+                self.status_text.append(f"CSV preview limited to first {data_row_count} rows (safety limit reached)")
+            else:
+                self.status_text.append(f"CSV preview showing all {data_row_count} rows")
             
             self.status_text.append(f"Loaded CSV file: {Path(file_path).name}")
             
@@ -259,7 +269,15 @@ class CSVImportDialog(QDialog):
         for i in range(len(headers)):
             header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         
-        self.preview_label.setText(f"CSV Preview (showing first {len(data_rows)} rows):")
+        # Update preview label with detailed information
+        total_rows = self.csv_data.get('total_rows_previewed', len(data_rows))
+        data_row_count = len(data_rows)
+        hit_limit = self.csv_data.get('hit_limit', False)
+        
+        if hit_limit:
+            self.preview_label.setText(f"CSV Preview (showing first {data_row_count} rows of {total_rows} total - hit safety limit):")
+        else:
+            self.preview_label.setText(f"CSV Preview (showing all {data_row_count} rows):")
     
     def _update_parse_button(self):
         """Update parse button state."""
@@ -338,7 +356,7 @@ class CSVImportDialog(QDialog):
             self.select_none_button.setEnabled(True)
             self.toggle_selected_button.setEnabled(True)
             self.gdtf_matching_button.setEnabled(True)
-            self.set_as_master_button.setEnabled(True)
+            self.set_as_ma_button.setEnabled(True)
             self.set_as_remote_button.setEnabled(True)
             
         except Exception as e:
@@ -366,9 +384,20 @@ class CSVImportDialog(QDialog):
             checkbox.setStyleSheet("QCheckBox { margin: auto; }")
             self.data_table.setCellWidget(row, 0, checkbox)
             
+            # Get fixture type from GDTF profile or fallback to fixture type
+            fixture_type = '—'
+            if fixture.get('matched', False):
+                profile_model = fixture.get('gdtf_profile')
+                if profile_model and hasattr(profile_model, 'name'):
+                    fixture_type = profile_model.name
+                else:
+                    fixture_type = fixture.get('type', '—')
+            else:
+                fixture_type = fixture.get('type', '—')
+            
             # Fixture data
             self.data_table.setItem(row, 1, QTableWidgetItem(fixture.get('name', '')))
-            self.data_table.setItem(row, 2, QTableWidgetItem(fixture.get('type', '')))
+            self.data_table.setItem(row, 2, QTableWidgetItem(fixture_type))
             self.data_table.setItem(row, 3, QTableWidgetItem(fixture.get('mode', '')))
             # Show universe and channel values
             csv_universe = fixture.get('csv_universe', 1)
@@ -383,7 +412,7 @@ class CSVImportDialog(QDialog):
             role_item = QTableWidgetItem(role_display)
             if role == 'none':
                 role_item.setBackground(Qt.GlobalColor.lightGray)
-            elif role == 'master':
+            elif role == 'ma':
                 role_item.setBackground(Qt.GlobalColor.darkGreen)
                 role_item.setForeground(Qt.GlobalColor.white)
             elif role == 'remote':
@@ -526,21 +555,21 @@ class CSVImportDialog(QDialog):
         else:
             self.status_text.append(f"Checked {len(selected_rows)} selected rows")
     
-    def _set_selected_as_master(self):
-        """Set selected fixtures as master role."""
+    def _set_selected_as_ma(self):
+        """Set selected fixtures as ma role."""
         selected_count = 0
         for row in range(self.data_table.rowCount()):
             checkbox = self.data_table.cellWidget(row, 0)
             if checkbox and checkbox.isChecked() and row < len(self.fixtures):
                 fixture = self.fixtures[row]
-                core.set_fixture_role(fixture, 'master')
+                core.set_fixture_role(fixture, 'ma')
                 selected_count += 1
         
         if selected_count > 0:
             self._show_fixtures_table()  # Refresh table to show updated roles
-            self.status_text.append(f"Set {selected_count} fixture{'s' if selected_count != 1 else ''} as master")
+            self.status_text.append(f"Set {selected_count} fixture{'s' if selected_count != 1 else ''} as ma")
         else:
-            QMessageBox.information(self, "No Selection", "Please select fixtures to set as master.")
+            QMessageBox.information(self, "No Selection", "Please select fixtures to set as ma.")
     
     def _set_selected_as_remote(self):
         """Set selected fixtures as remote role."""

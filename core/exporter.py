@@ -30,7 +30,7 @@ def export_to_text(fixtures: List[Dict[str, Any]]) -> str:
                 lines.append("")
             current_fixture = item['fixture_name']
             
-            lines.append(f"Fixture: {item['fixture_name']} (ID: {item['fixture_id']})")
+            lines.append(f"Fixture: {item['fixture_name']} (ID: {item['fixture_id']}, Type: {item['fixture_type']})")
             lines.append("-" * 30)
         
         address = f"{item['universe']}.{item['channel']:03d}"
@@ -44,13 +44,13 @@ def export_to_csv(fixtures: List[Dict[str, Any]]) -> str:
     export_data = get_export_data(fixtures)
     
     if not export_data:
-        return "fixture_name,fixture_id,attribute,universe,channel,absolute_address,sequence\n"
+        return "fixture_name,fixture_id,fixture_type,attribute,universe,channel,absolute_address,sequence\n"
     
     lines = []
-    lines.append("fixture_name,fixture_id,attribute,universe,channel,absolute_address,sequence")
+    lines.append("fixture_name,fixture_id,fixture_type,attribute,universe,channel,absolute_address,sequence")
     
     for item in export_data:
-        lines.append(f"{item['fixture_name']},{item['fixture_id']},{item['attribute']},{item['universe']},{item['channel']},{item['absolute_address']},{item['sequence']}")
+        lines.append(f"{item['fixture_name']},{item['fixture_id']},{item['fixture_type']},{item['attribute']},{item['universe']},{item['channel']},{item['absolute_address']},{item['sequence']}")
     
     return "\n".join(lines)
 
@@ -67,6 +67,7 @@ def export_to_json(fixtures: List[Dict[str, Any]]) -> str:
             fixtures_dict[fixture_key] = {
                 'name': item['fixture_name'],
                 'fixture_id': item['fixture_id'],
+                'fixture_type': item['fixture_type'],
                 'attributes': {}
             }
         

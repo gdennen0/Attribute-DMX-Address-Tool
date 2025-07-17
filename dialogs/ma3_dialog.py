@@ -1,6 +1,6 @@
 """
-Simple MVR import dialog.
-Allows users to select MVR file and choose fixtures to import via checkboxes.
+Simple MA3 XML import dialog.
+Allows users to select MA3 XML file and choose fixtures to import via checkboxes.
 """
 
 from typing import List, Dict, Any, Optional
@@ -18,8 +18,8 @@ from .gdtf_dialog import GDTFMatchingDialog
 from .attribute_selection_dialog import AttributeSelectionDialog
 
 
-class MVRImportDialog(QDialog):
-    """Simple dialog for importing MVR files with fixture selection."""
+class MA3ImportDialog(QDialog):
+    """Simple dialog for importing MA3 XML files with fixture selection."""
     
     fixtures_imported = pyqtSignal(list)  # List of selected fixtures
     
@@ -29,7 +29,7 @@ class MVRImportDialog(QDialog):
         self.fixtures = []
         self.gdtf_profiles = {}
         
-        self.setWindowTitle("Import MVR File")
+        self.setWindowTitle("Import MA3 XML File")
         self.setMinimumSize(800, 600)
         
         self._setup_ui()
@@ -41,10 +41,10 @@ class MVRImportDialog(QDialog):
         # File selection
         file_layout = QHBoxLayout()
         self.file_label = QLabel("No file selected")
-        self.browse_button = QPushButton("Browse MVR File...")
+        self.browse_button = QPushButton("Browse MA3 XML File...")
         self.browse_button.clicked.connect(self._browse_file)
         
-        file_layout.addWidget(QLabel("MVR File:"))
+        file_layout.addWidget(QLabel("MA3 XML File:"))
         file_layout.addWidget(self.file_label, 1)
         file_layout.addWidget(self.browse_button)
         layout.addLayout(file_layout)
@@ -107,7 +107,7 @@ class MVRImportDialog(QDialog):
     
     def _setup_table(self):
         """Set up the fixtures table."""
-        headers = ["Select", "Name", "Type", "Mode", "Address", "ID", "Role", "Status"]
+        headers = ["Select", "Name", "FID", "Universe", "Channel", "Type", "Mode", "Role", "Status"]
         self.fixtures_table.setColumnCount(len(headers))
         self.fixtures_table.setHorizontalHeaderLabels(headers)
         
@@ -119,44 +119,46 @@ class MVRImportDialog(QDialog):
         header = self.fixtures_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
         
         self.fixtures_table.setColumnWidth(0, 60)
     
     def _browse_file(self):
-        """Browse for MVR file."""
+        """Browse for MA3 XML file."""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select MVR File",
-            self.config.get_last_mvr_directory(),
-            "MVR Files (*.mvr)"
+            "Select MA3 XML File",
+            self.config.get_last_ma3_directory(),
+            "MA3 XML Files (*.xml)"
         )
         
         if file_path:
-            self.config.set_last_mvr_directory(str(Path(file_path).parent))
-            self._load_mvr_file(file_path)
+            self.config.set_last_ma3_directory(str(Path(file_path).parent))
+            self._load_ma3_file(file_path)
     
-    def _load_mvr_file(self, file_path: str):
-        """Load and parse MVR file."""
+    def _load_ma3_file(self, file_path: str):
+        """Load and parse MA3 XML file."""
         self.file_label.setText(Path(file_path).name)
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate progress
-        self.status_text.append(f"Loading MVR file: {Path(file_path).name}")
+        self.status_text.append(f"Loading MA3 XML file: {Path(file_path).name}")
         
         try:
             # First validate the file
-            if not core.validate_mvr_file(file_path):
-                error_msg = "Invalid MVR file. MVR files must be zip archives containing GeneralSceneDescription.xml"
+            if not core.validate_ma3_file(file_path):
+                error_msg = "Invalid MA3 XML file. File must be a valid XML with GMA3 root element."
                 self.status_text.append(f"Error: {error_msg}")
                 QMessageBox.warning(self, "Invalid File", error_msg)
                 return
             
-            # Parse MVR file
-            result = core.parse_mvr_file(file_path)
+            # Parse MA3 XML file
+            result = core.parse_ma3_file(file_path)
             
             if 'error' in result:
                 self.status_text.append(f"Error: {result['error']}")
@@ -167,14 +169,9 @@ class MVRImportDialog(QDialog):
             self.gdtf_profiles = result['gdtf_profiles']
             
             if not self.fixtures:
-                self.status_text.append("Warning: No fixtures found in MVR file")
-                QMessageBox.information(self, "No Fixtures", "No fixtures were found in the MVR file. The file may be empty or have an unsupported format.")
+                self.status_text.append("Warning: No fixtures found in MA3 XML file")
+                QMessageBox.information(self, "No Fixtures", "No fixtures were found in the MA3 XML file. The file may be empty or have an unsupported format.")
                 return
-            
-            # Auto-match fixtures to GDTF profiles
-            if self.gdtf_profiles:
-                self.status_text.append("Auto-matching fixtures to GDTF profiles...")
-                core.auto_match_fixtures(self.fixtures, self.gdtf_profiles)
             
             # Load external GDTF folder if configured
             external_folder = self.config.get_external_gdtf_folder()
@@ -183,8 +180,10 @@ class MVRImportDialog(QDialog):
                 external_profiles = core.parse_external_gdtf_folder(external_folder)
                 self.gdtf_profiles.update(external_profiles)
                 
-                # Re-run matching with external profiles
-                core.auto_match_fixtures(self.fixtures, self.gdtf_profiles)
+                # Auto-match fixtures to GDTF profiles
+                if self.gdtf_profiles:
+                    self.status_text.append("Auto-matching fixtures to GDTF profiles...")
+                    core.auto_match_fixtures(self.fixtures, self.gdtf_profiles)
             
             # Update table
             self._populate_table()
@@ -194,7 +193,7 @@ class MVRImportDialog(QDialog):
             self.status_text.append(f"Loaded {summary['total']} fixtures, {summary['matched']} matched ({summary['match_rate']:.1f}%)")
             
         except Exception as e:
-            error_msg = f"Failed to load MVR file: {str(e)}"
+            error_msg = f"Failed to load MA3 XML file: {str(e)}"
             self.status_text.append(f"Error: {error_msg}")
             QMessageBox.critical(self, "Error", error_msg)
         
@@ -225,10 +224,11 @@ class MVRImportDialog(QDialog):
             
             # Fixture data
             self.fixtures_table.setItem(row, 1, QTableWidgetItem(fixture.get('name', '')))
-            self.fixtures_table.setItem(row, 2, QTableWidgetItem(fixture_type))
-            self.fixtures_table.setItem(row, 3, QTableWidgetItem(fixture.get('mode', '')))
-            self.fixtures_table.setItem(row, 4, QTableWidgetItem(str(fixture.get('base_address', 1))))
-            self.fixtures_table.setItem(row, 5, QTableWidgetItem(str(fixture.get('fixture_id', 0))))
+            self.fixtures_table.setItem(row, 2, QTableWidgetItem(str(fixture.get('fixture_id', 0))))
+            self.fixtures_table.setItem(row, 3, QTableWidgetItem(str(fixture.get('universe', ''))))
+            self.fixtures_table.setItem(row, 4, QTableWidgetItem(str(fixture.get('channel', ''))))
+            self.fixtures_table.setItem(row, 5, QTableWidgetItem(fixture_type))
+            self.fixtures_table.setItem(row, 6, QTableWidgetItem(fixture.get('mode', '')))
             
             # Role
             role = core.get_fixture_role(fixture)
@@ -242,7 +242,7 @@ class MVRImportDialog(QDialog):
             elif role == 'remote':
                 role_item.setBackground(Qt.GlobalColor.darkBlue)
                 role_item.setForeground(Qt.GlobalColor.white)
-            self.fixtures_table.setItem(row, 6, role_item)
+            self.fixtures_table.setItem(row, 7, role_item)
             
             # Status
             status = "Matched" if fixture.get('matched') else "Unmatched"
@@ -251,7 +251,7 @@ class MVRImportDialog(QDialog):
                 status_item.setBackground(Qt.GlobalColor.green)
             else:
                 status_item.setBackground(Qt.GlobalColor.lightGray)
-            self.fixtures_table.setItem(row, 7, status_item)
+            self.fixtures_table.setItem(row, 8, status_item)
         
         self._update_import_button()
     
@@ -260,7 +260,7 @@ class MVRImportDialog(QDialog):
         if row < len(self.fixtures):
             selected = state == Qt.CheckState.Checked.value
             core.set_fixture_selected(self.fixtures[row], selected)
-        self._update_import_button()
+            self._update_import_button()
     
     def _select_all(self):
         """Select all fixtures."""
@@ -345,27 +345,14 @@ class MVRImportDialog(QDialog):
             QMessageBox.information(self, "No Selection", "Please select fixtures to set as remote.")
     
     def _open_gdtf_matching(self):
-        """Open the GDTF profile matching dialog."""
-        if not self.fixtures:
-            QMessageBox.information(self, "No Fixtures", "Please load an MVR file first.")
+        """Open GDTF matching dialog."""
+        if not self.gdtf_profiles:
+            QMessageBox.information(self, "No GDTF Profiles", "No GDTF profiles available for matching.")
             return
         
-        dialog = GDTFMatchingDialog(self.fixtures, self.config, self)
-        result = dialog.exec()
-        
-        if result == QDialog.DialogCode.Accepted:
-            # Apply the matches to fixtures
-            updated_count = dialog.apply_matches_to_fixtures()
-            
-            if updated_count > 0:
-                # Refresh the fixtures table to show updated match status
-                self._populate_table()
-                
-                # Show updated summary
-                summary = core.get_match_summary(self.fixtures)
-                self.status_text.append(f"GDTF matching complete: {summary['matched']}/{summary['total']} fixtures matched ({summary['match_rate']:.1f}%)")
-            else:
-                self.status_text.append("No GDTF matches were applied")
+        dialog = GDTFMatchingDialog(self.fixtures, self.gdtf_profiles, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._populate_table()
     
     def _update_import_button(self):
         """Update import button state based on selection."""
@@ -426,7 +413,4 @@ class MVRImportDialog(QDialog):
     def on_attributes_selected(self, selected_attributes: List[str]):
         """Handle attributes selected from the attribute selection dialog."""
         # Save selected attributes to config
-        self.config.set_selected_attributes(selected_attributes)
-
-
-from pathlib import Path 
+        self.config.set_selected_attributes(selected_attributes) 

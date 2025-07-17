@@ -464,11 +464,11 @@ class AttributeSelectionDialog(QDialog):
             last_dir = self.config.get_last_gdtf_directory()
             start_dir = last_dir if last_dir and os.path.exists(last_dir) else ""
         
+        # Use native macOS dialog with files visible but greyed out
         folder_path = QFileDialog.getExistingDirectory(
             self,
             "Select GDTF Folder",
-            start_dir,
-            QFileDialog.Option.ShowDirsOnly
+            start_dir
         )
         
         if folder_path:

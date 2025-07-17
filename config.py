@@ -116,6 +116,15 @@ class Config:
         self.config["last_csv_directory"] = directory
         self.save_config()
     
+    def get_last_ma3_directory(self) -> str:
+        """Get last used MA3 XML directory."""
+        return self.config.get("last_ma3_directory", "")
+    
+    def set_last_ma3_directory(self, directory: str):
+        """Set last used MA3 XML directory and save config."""
+        self.config["last_ma3_directory"] = directory
+        self.save_config()
+    
     def get_last_project_directory(self) -> str:
         """Get last used project directory."""
         return self.config.get("last_project_directory", "")

@@ -116,6 +116,7 @@ class SettingsDialog(QDialog):
     
     def _browse_gdtf_folder(self):
         """Browse for GDTF folder."""
+        # Use native macOS dialog with files visible but greyed out
         folder = QFileDialog.getExistingDirectory(
             self,
             "Select GDTF Folder",

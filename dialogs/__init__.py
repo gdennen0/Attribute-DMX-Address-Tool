@@ -4,6 +4,7 @@ Clean UI components with no business logic.
 """
 
 from .mvr_dialog import MVRImportDialog
+from .ma3_dialog import MA3ImportDialog
 from .csv_dialog import CSVImportDialog
 from .settings_dialog import SettingsDialog
 from .gdtf_dialog import GDTFMatchingDialog
